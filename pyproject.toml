@@ -1,7 +1,11 @@
 [project]
 name = "deily-entries"
 version = "0.1.0"
-description = "Add your description here"
+description = "personal diary"
 readme = "README.md"
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+    "fastapi[standard]>=0.141.1",
+    "fastui>=0.9.0",
+    "sqlalchemy>=2.0.52",
+]
