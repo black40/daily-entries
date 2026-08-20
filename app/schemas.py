@@ -7,19 +7,13 @@ class NoteCreateSchema(BaseModel):
     content: str = Field(title="Текст заметки")
 
 class NoteReadSchema(BaseModel):
-    """Схема для отображения в таблице FastUI."""
-    id: int
-    title: str
-    created_at: datetime
-
-    # Правильная конфигурация для Pydantic v2
-    model_config = ConfigDict(from_attributes=True)
-
-class NoteReadSchema(BaseModel):
     """Схема для отображения в таблице FastUI и детального просмотра."""
     id: int
     title: str
-    content: str  # <-- ДОБАВИЛИ ЭТО ПОЛЕ
+    content: str
     created_at: datetime
+    
+    # Виртуальное поле для интерактивного действия в строке таблицы
+    archive_action: str = ""
 
     model_config = ConfigDict(from_attributes=True)

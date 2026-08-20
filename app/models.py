@@ -9,22 +9,24 @@ class Note(Base):
     """Модель для ежедневных записок и дневника."""
     __tablename__ = "notes"
 
+    model_config = {"from_attributes": True}
+
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    title: Mapped[str] = mapped_column(String(100), index=True)  # Заголовок заметки
-    content: Mapped[str] = mapped_column(Text)                    # Текст заметки
+    title: Mapped[str] = mapped_column(String(100), index=True)
+    content: Mapped[str] = mapped_column(Text)
     
-    # Автоматически ставит текущее время при создании
+    # НОВОЕ ПОЛЕ: статус архивации (по умолчанию False)
+    is_archived: Mapped[bool] = mapped_column(default=False)
+    
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), 
         server_default=func.now()
     )
-    # Время обновления (меняется при редактировании)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), 
         server_default=func.now(), 
         onupdate=func.now()
     )
-
 
 class WishItem(Base):
     """Модель для списка желаний (Wishlist)."""
