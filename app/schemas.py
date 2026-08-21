@@ -7,13 +7,15 @@ class NoteCreateSchema(BaseModel):
     content: str = Field(title="Текст заметки")
 
 class NoteReadSchema(BaseModel):
-    """Схема для отображения в таблице FastUI и детального просмотра."""
+    """Схема для отображения заметок в таблице FastUI."""
     id: int
     title: str
     content: str
     created_at: datetime
     
-    # Виртуальное поле для интерактивного действия в строке таблицы
-    archive_action: str = ""
+    # Легальные текстовые поля, которые таблица превратит в кликабельные кнопки
+    archive_action: str = "📦 В архив"
+    unarchive_action: str = "↩️ Вернуть"
+    delete_action: str = "❌ Удалить"
 
     model_config = ConfigDict(from_attributes=True)
