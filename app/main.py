@@ -11,11 +11,13 @@ from fastui.forms import fastui_form
 
 # Импорты вашей структуры проекта
 from app.database import engine, Base, get_db
+from app.auth import hash_password  # Наш новый безопасный импорт
 import app.models as models
-from app.schemas import NoteCreateSchema, NoteReadSchema
+from app.schemas import NoteCreateSchema, NoteReadSchema, UserRegisterSchema
 
 app = FastAPI()
 
+# Автоматически создаем таблицы в notes_app.db при старте
 Base.metadata.create_all(bind=engine)
 
 
@@ -40,10 +42,13 @@ def notes_list_page(db: Session = Depends(get_db)) -> list[AnyComponent]:
             components=[
                 c.Heading(text='📝 Мой Дневник & Заметки', level=1),
                 
-                # Навигация сверху
+                # Верхняя навигация
                 c.Link(components=[c.Text(text='📝 Активные записи')], on_click=GoToEvent(url='/'), class_name='btn btn-sm btn-primary me-2'),
-                c.Link(components=[c.Text(text='🗂 Открыть архив')], on_click=GoToEvent(url='/archive'), class_name='btn btn-sm btn-outline-secondary me-2'),
-                c.Link(components=[c.Text(text='➕ Написать новую заметку')], on_click=GoToEvent(url='/add'), class_name='btn btn-sm btn-success'),
+                c.Link(components=[c.Text(text='🗂 Открыть архив')], on_click=GoToEvent(url='/archive'), class_name='btn btn-sm btn-secondary me-2'),
+                c.Link(components=[c.Text(text='➕ Написать новую заметку')], on_click=GoToEvent(url='/add'), class_name='btn btn-sm btn-success me-2'),
+                
+                # Голубая кнопка регистрации на главной странице
+                c.Link(components=[c.Text(text='🔑 Регистрация')], on_click=GoToEvent(url='/register'), class_name='btn btn-sm btn-info'),
                 
                 c.Div(components=[], class_name='mt-4'),
                 c.Heading(text='Ваши записи', level=3) if notes_for_table else c.Paragraph(text='Активных записей нет.'),
@@ -61,16 +66,58 @@ def notes_list_page(db: Session = Depends(get_db)) -> list[AnyComponent]:
     ]
 
 
+@app.get('/api/register', response_model=FastUI, response_model_exclude_none=True)
+def register_page() -> list[AnyComponent]:
+    '''Страница с формой регистрации нового пользователя.'''
+    return [
+        c.Page(
+            components=[
+                c.Heading(text='🔑 Регистрация нового аккаунта', level=1),
+                c.Link(components=[c.Text(text='🔙 На главную')], on_click=GoToEvent(url='/'), class_name='btn btn-secondary mb-3'),
+                c.Div(components=[], class_name='mt-4'),
+                
+                # Автоматическая форма FastUI на основе SecretStr скрывает вводимый пароль точками
+                c.ModelForm(model=UserRegisterSchema, submit_url='/api/register')
+            ]
+        )
+    ]
+
+
+@app.post('/api/register', response_model=FastUI, response_model_exclude_none=True)
+def handle_register(
+    form: UserRegisterSchema = fastui_form(UserRegisterSchema),
+    db: Session = Depends(get_db)
+) -> list[AnyComponent]:
+    '''Обработчик регистрации: проверяет уникальность email, хэширует пароль и пишет в SQLite.'''
+    # 1. Проверяем, не занят ли почтовый ящик в базе
+    existing_user = db.query(models.User).filter(models.User.email == form.email).first()
+    if existing_user:
+        raise HTTPException(status_code=400, detail='Пользователь с таким email уже существует')
+    
+    # 2. Безопасно хэшируем пароль. Достаем строку из SecretStr через метод get_secret_value()
+    hashed_pwd = hash_password(form.password.get_secret_value())
+    
+    # 3. Сохраняем зашифрованного пользователя
+    new_user = models.User(
+        email=form.email,
+        hashed_password=hashed_pwd
+    )
+    db.add(new_user)
+    db.commit()
+    
+    # После успешной отправки возвращаем пользователя на главную страницу
+    return [c.FireEvent(event=GoToEvent(url='/'))]
+
+
 @app.get('/api/archive', response_model=FastUI, response_model_exclude_none=True)
 def archive_list_page(db: Session = Depends(get_db)) -> list[AnyComponent]:
-    '''Страница архива: раздельные чистые колонки под Вернуть и Удалить.'''
+    '''Страница архива заметок.'''
     db_notes = (
         db.query(models.Note)
         .filter(models.Note.is_archived == True)
         .order_by(models.Note.created_at.desc())
         .all()
     )
-    
     notes_for_table = []
     for note in db_notes:
         pydantic_note = NoteReadSchema.model_validate(note)
@@ -81,27 +128,16 @@ def archive_list_page(db: Session = Depends(get_db)) -> list[AnyComponent]:
         c.Page(
             components=[
                 c.Heading(text='🗂 Архив записей', level=1),
-                
                 c.Link(components=[c.Text(text='📝 Назад к записям')], on_click=GoToEvent(url='/'), class_name='btn btn-sm btn-outline-primary me-2'),
                 c.Link(components=[c.Text(text='🗂 Архив')], on_click=GoToEvent(url='/archive'), class_name='btn btn-sm btn-secondary'),
-                
                 c.Div(components=[], class_name='mt-4'),
-                
                 c.Table(
                     data=notes_for_table,
                     columns=[
                         DisplayLookup(field='title', title='Название', on_click=GoToEvent(url='/note/{id}')),
                         DisplayLookup(field='created_at', title='Дата создания', mode=DisplayMode.date),
-                        DisplayLookup(
-                            field='archive_action', 
-                            title='Восстановить', 
-                            on_click=GoToEvent(url='/note/{id}/unarchive-run')
-                        ),
-                        DisplayLookup(
-                            field='delete_action', 
-                            title='Удалить', 
-                            on_click=GoToEvent(url='/note/{id}/delete-run')
-                        ),
+                        DisplayLookup(field='archive_action', title='Восстановить', on_click=GoToEvent(url='/note/{id}/unarchive-run')),
+                        DisplayLookup(field='delete_action', title='Удалить', on_click=GoToEvent(url='/note/{id}/delete-run')),
                     ]
                 ) if notes_for_table else c.Paragraph(text='В архиве пока ничего нет.')
             ]
@@ -111,7 +147,6 @@ def archive_list_page(db: Session = Depends(get_db)) -> list[AnyComponent]:
 
 @app.get('/api/note/{note_id}/archive-run', response_model=FastUI, response_model_exclude_none=True)
 def handle_archive_note(note_id: int, db: Session = Depends(get_db)) -> list[AnyComponent]:
-    '''Перевод заметки в архив.'''
     db_note = db.query(models.Note).filter(models.Note.id == note_id).first()
     if db_note:
         db_note.is_archived = True
@@ -121,7 +156,6 @@ def handle_archive_note(note_id: int, db: Session = Depends(get_db)) -> list[Any
 
 @app.get('/api/note/{note_id}/unarchive-run', response_model=FastUI, response_model_exclude_none=True)
 def handle_unarchive_note(note_id: int, db: Session = Depends(get_db)) -> list[AnyComponent]:
-    '''Извлечение заметки из архива.'''
     db_note = db.query(models.Note).filter(models.Note.id == note_id).first()
     if db_note:
         db_note.is_archived = False
@@ -131,7 +165,6 @@ def handle_unarchive_note(note_id: int, db: Session = Depends(get_db)) -> list[A
 
 @app.get('/api/note/{note_id}/delete-run', response_model=FastUI, response_model_exclude_none=True)
 def handle_delete_note(note_id: int, db: Session = Depends(get_db)) -> list[AnyComponent]:
-    '''Физическое удаление заметки из SQLite базы.'''
     db_note = db.query(models.Note).filter(models.Note.id == note_id).first()
     if db_note:
         db.delete(db_note)
@@ -141,11 +174,9 @@ def handle_delete_note(note_id: int, db: Session = Depends(get_db)) -> list[AnyC
 
 @app.get('/api/note/{note_id}', response_model=FastUI, response_model_exclude_none=True)
 def view_note_page(note_id: int, db: Session = Depends(get_db)) -> list[AnyComponent]:
-    '''Страница детального просмотра одной заметки.'''
     db_note = db.query(models.Note).filter(models.Note.id == note_id).first()
     if not db_note:
         raise HTTPException(status_code=404, detail='Заметка не найдена')
-    
     note = NoteReadSchema.model_validate(db_note)
     return [
         c.Page(
@@ -162,7 +193,6 @@ def view_note_page(note_id: int, db: Session = Depends(get_db)) -> list[AnyCompo
 
 @app.get('/api/add', response_model=FastUI, response_model_exclude_none=True)
 def add_note_page() -> list[AnyComponent]:
-    '''Страница с формой добавления новой заметки.'''
     return [
         c.Page(
             components=[
@@ -180,13 +210,10 @@ def handle_add_note(
     form: NoteCreateSchema = fastui_form(NoteCreateSchema),
     db: Session = Depends(get_db)
 ) -> list[AnyComponent]:
-    '''Обработчик отправки формы. Автоматически привязывает заметку к пользователю.'''
-    user = db.query(models.User).first()
+    '''Обработчик отправки формы. Автоматически привязывает заметку к последнему созданному пользователю.'''
+    user = db.query(models.User).order_by(models.User.id.desc()).first()
     if not user:
-        user = models.User(
-            email='test@example.com',
-            hashed_password='fake_temporary_hash_for_now'
-        )
+        user = models.User(email='test@example.com', hashed_password='fake')
         db.add(user)
         db.flush()
     
@@ -202,4 +229,5 @@ def handle_add_note(
 
 @app.get('/{path:path}')
 async def html_landing() -> HTMLResponse:
+    '''Любой адрес, не начинающийся с /api, отдаст JS-фронтенд от FastUI.'''
     return HTMLResponse(prebuilt_html(title='Личный Дневник'))

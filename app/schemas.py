@@ -1,5 +1,5 @@
 from datetime import datetime
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, Field, ConfigDict, SecretStr  # <-- Добавили SecretStr
 
 class NoteCreateSchema(BaseModel):
     '''Схема для формы добавления новой заметки.'''
@@ -12,21 +12,18 @@ class NoteReadSchema(BaseModel):
     title: str
     content: str
     created_at: datetime
-    
-    # Дефолтные значения для интерактивных колонок действий
     archive_action: str = ''
-    delete_action: str = '❌ Удалить'  # <-- ВОТ ЭТО ПОЛЕ ОЖИВИТ КНОПКУ
+    delete_action: str = '❌ Удалить'
 
     model_config = ConfigDict(from_attributes=True)
 
-
-# Заготовки для будущей регистрации
 class UserRegisterSchema(BaseModel):
-    '''Форма регистрации нового пользователя.'''
+    '''Форма регистрации нового пользователя с маскировкой пароля.'''
     email: str = Field(title='Электронная почта', max_length=150)
-    password: str = Field(title='Пароль', max_length=50)
+    # Заменили str на SecretStr, чтобы скрыть пароль в браузере
+    password: SecretStr = Field(title='Пароль', max_length=50)
 
 class UserLoginSchema(BaseModel):
     '''Форма входа в приложение.'''
     email: str = Field(title='Электронная почта')
-    password: str = Field(title='Пароль')
+    password: SecretStr = Field(title='Пароль')
