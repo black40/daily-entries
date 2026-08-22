@@ -1,3 +1,6 @@
+from fastapi import Response, Request
+from app.session import set_user_session, get_user_from_session
+
 from fastapi import FastAPI, Depends, HTTPException
 from fastapi.responses import HTMLResponse
 from sqlalchemy.orm import Session
@@ -8,12 +11,16 @@ from fastui import components as c
 from fastui.components.display import DisplayLookup, DisplayMode
 from fastui.events import GoToEvent
 from fastui.forms import fastui_form
+from fastapi import Response, Request
+
 
 # Импорты вашей структуры проекта
 from app.database import engine, Base, get_db
 from app.auth import hash_password  # Наш новый безопасный импорт
 import app.models as models
-from app.schemas import NoteCreateSchema, NoteReadSchema, UserRegisterSchema
+from app.schemas import NoteCreateSchema, NoteReadSchema, UserRegisterSchema, UserLoginSchema
+from app.session import set_user_session, get_user_from_session
+from app.auth import verify_password
 
 app = FastAPI()
 
@@ -23,7 +30,7 @@ Base.metadata.create_all(bind=engine)
 
 @app.get('/api/', response_model=FastUI, response_model_exclude_none=True)
 def notes_list_page(db: Session = Depends(get_db)) -> list[AnyComponent]:
-    '''Главная страница: список активных заметок.'''
+    '''Главная страница: список активных заметок с навигацией и авторизацией.'''
     db_notes = (
         db.query(models.Note)
         .filter(models.Note.is_archived == False)
@@ -42,13 +49,14 @@ def notes_list_page(db: Session = Depends(get_db)) -> list[AnyComponent]:
             components=[
                 c.Heading(text='📝 Мой Дневник & Заметки', level=1),
                 
-                # Верхняя навигация
+                # Ряд навигации (Активные, Архив, Написать)
                 c.Link(components=[c.Text(text='📝 Активные записи')], on_click=GoToEvent(url='/'), class_name='btn btn-sm btn-primary me-2'),
                 c.Link(components=[c.Text(text='🗂 Открыть архив')], on_click=GoToEvent(url='/archive'), class_name='btn btn-sm btn-secondary me-2'),
-                c.Link(components=[c.Text(text='➕ Написать новую заметку')], on_click=GoToEvent(url='/add'), class_name='btn btn-sm btn-success me-2'),
+                c.Link(components=[c.Text(text='➕ Написать новую заметку')], on_click=GoToEvent(url='/add'), class_name='btn btn-sm btn-success me-4'),
                 
-                # Голубая кнопка регистрации на главной странице
-                c.Link(components=[c.Text(text='🔑 Регистрация')], on_click=GoToEvent(url='/register'), class_name='btn btn-sm btn-info'),
+                # ДОБАВИЛИ КНОПКИ АВТОРИЗАЦИИ: Теперь они физически есть в коде!
+                c.Link(components=[c.Text(text='🔑 Войти')], on_click=GoToEvent(url='/login'), class_name='btn btn-sm btn-warning me-2'),
+                c.Link(components=[c.Text(text='👤 Регистрация')], on_click=GoToEvent(url='/register'), class_name='btn btn-sm btn-outline-dark'),
                 
                 c.Div(components=[], class_name='mt-4'),
                 c.Heading(text='Ваши записи', level=3) if notes_for_table else c.Paragraph(text='Активных записей нет.'),
@@ -64,6 +72,7 @@ def notes_list_page(db: Session = Depends(get_db)) -> list[AnyComponent]:
             ]
         )
     ]
+
 
 
 @app.get('/api/register', response_model=FastUI, response_model_exclude_none=True)
@@ -207,23 +216,60 @@ def add_note_page() -> list[AnyComponent]:
 
 @app.post('/api/add', response_model=FastUI, response_model_exclude_none=True)
 def handle_add_note(
+    request: Request,  # <-- ДОБАВИЛИ СЮДА
     form: NoteCreateSchema = fastui_form(NoteCreateSchema),
     db: Session = Depends(get_db)
 ) -> list[AnyComponent]:
-    '''Обработчик отправки формы. Автоматически привязывает заметку к последнему созданному пользователю.'''
-    user = db.query(models.User).order_by(models.User.id.desc()).first()
-    if not user:
-        user = models.User(email='test@example.com', hashed_password='fake')
-        db.add(user)
-        db.flush()
-    
+    '''Обработчик добавления заметки: читает автора из сессии Cookie.'''
+    # Узнаем ID пользователя, который сейчас авторизован
+    user_id = get_user_from_session(request)
+
+    if not user_id:
+        # Если куки нет или она протухла, не даем писать в дневник
+        raise HTTPException(status_code=401, detail='Пожалуйста, войдите в аккаунт')
+
     new_note = models.Note(
         title=form.title,
         content=form.content,
-        user_id=user.id
+        user_id=user_id  # <-- ПРИВЯЗАЛИ К РЕАЛЬНОМУ АВТОРУ
     )
     db.add(new_note)
     db.commit()
+    return [c.FireEvent(event=GoToEvent(url='/'))]
+
+
+@app.get('/api/login', response_model=FastUI, response_model_exclude_none=True)
+def login_page() -> list[AnyComponent]:
+    '''Страница входа в приложение.'''
+    return [
+        c.Page(
+            components=[
+                c.Heading(text='🔑 Вход в систему', level=1),
+                c.Link(components=[c.Text(text='🔙 На главную')], on_click=GoToEvent(url='/'), class_name='btn btn-secondary mb-3'),
+                c.Div(components=[], class_name='mt-4'),
+                # Указали модель напрямую из импортированных схем
+                c.ModelForm(model=UserLoginSchema, submit_url='/api/login')
+            ]
+        )
+    ]
+
+
+@app.post('/api/login', response_model=FastUI, response_model_exclude_none=True)
+def handle_login(
+    response: Response,
+    # УБРАЛИ тернарный оператор, оставили чистую аннотацию типа по правилам Python
+    form: UserLoginSchema = fastui_form(UserLoginSchema),
+    db: Session = Depends(get_db)
+) -> list[AnyComponent]:
+    '''Обработчик входа: сверяет хэш и выдает Cookie-сессию.'''
+    user = db.query(models.User).filter(models.User.email == form.email).first()
+    
+    if not user or not verify_password(form.password.get_secret_value(), user.hashed_password):
+        raise HTTPException(status_code=400, detail='Неверный email или пароль')
+    
+    # ЗАПОМИНАЕМ ПОЛЬЗОВАТЕЛЯ: Пишем зашифрованный ID в браузер
+    set_user_session(response, user.id)
+    
     return [c.FireEvent(event=GoToEvent(url='/'))]
 
 
