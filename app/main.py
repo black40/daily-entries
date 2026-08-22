@@ -1,6 +1,4 @@
 from fastapi import Response, Request
-from app.session import set_user_session, get_user_from_session
-
 from fastapi import FastAPI, Depends, HTTPException
 from fastapi.responses import HTMLResponse
 from sqlalchemy.orm import Session
@@ -11,26 +9,44 @@ from fastui import components as c
 from fastui.components.display import DisplayLookup, DisplayMode
 from fastui.events import GoToEvent
 from fastui.forms import fastui_form
-from fastapi import Response, Request
 
-
-# Импорты вашей структуры проекта
-from app.database import engine, Base, get_db
-from app.auth import hash_password  # Наш новый безопасный импорт
+# Импорты структуры проекта
 import app.models as models
+from app.database import engine, Base, get_db
+from app.auth import hash_password, verify_password
 from app.schemas import NoteCreateSchema, NoteReadSchema, UserRegisterSchema, UserLoginSchema
-from app.session import set_user_session, get_user_from_session
-from app.auth import verify_password
+from app.session import set_user_session, get_user_from_session, refresh_user_session
+
 
 app = FastAPI()
+
+@app.middleware('http')
+async def sliding_session_middleware(request: Request, call_next):
+    '''Промежуточный слой, который сдвигает срок годности Cookie при каждом клике.'''
+    response = await call_next(request)
+    
+    # ИСПРАВЛЕНО: Если пользователь выходит (/logout), мы ЖЕЛЕЗНО не продлеваем сессию!
+    if '/logout' in request.url.path:
+        return response
+        
+    # Для всех остальных страниц (кроме иконок) кука плавно скользит вперед
+    if not request.url.path.startswith('/favicon.ico'):
+        refresh_user_session(request, response)
+        
+    return response
+
+
 
 # Автоматически создаем таблицы в notes_app.db при старте
 Base.metadata.create_all(bind=engine)
 
 
 @app.get('/api/', response_model=FastUI, response_model_exclude_none=True)
-def notes_list_page(db: Session = Depends(get_db)) -> list[AnyComponent]:
-    '''Главная страница: список активных заметок с навигацией и авторизацией.'''
+def notes_list_page(
+    request: Request,  # <-- ДОБАВИЛИ СЮДА, чтобы читать Cookie
+    db: Session = Depends(get_db)
+) -> list[AnyComponent]:
+    '''Главная страница: список активных заметок с динамической авторизацией.'''
     db_notes = (
         db.query(models.Note)
         .filter(models.Note.is_archived == False)
@@ -44,19 +60,41 @@ def notes_list_page(db: Session = Depends(get_db)) -> list[AnyComponent]:
         pydantic_note.archive_action = '📦 В архив'
         notes_for_table.append(pydantic_note)
 
+    # 1. Проверяем, авторизован ли пользователь прямо сейчас
+    user_id = get_user_from_session(request)
+    auth_components = []
+
+    if user_id:
+        # Если пользователь вошёл, ищем его email в базе
+        user = db.query(models.User).filter(models.User.id == user_id).first()
+        user_email = user.email if user else 'Пользователь'
+        
+        # ИСПРАВЛЕНО: Заменили c.Span на проверенный c.Paragraph с классом d-inline.
+        # Теперь Pydantic примет class_name, а текст останется в одну строку с кнопкой!
+        auth_components = [
+            c.Paragraph(text=f'👤 {user_email}', class_name='text-muted me-2 d-inline'),
+            c.Link(components=[c.Text(text='🚪 Выйти')], on_click=GoToEvent(url='/logout'), class_name='btn btn-sm btn-danger')
+        ]
+
+    else:
+        # Если не вошёл — показываем стандартные кнопки Войти и Регистрация
+        auth_components = [
+            c.Link(components=[c.Text(text='🔑 Войти')], on_click=GoToEvent(url='/login'), class_name='btn btn-sm btn-warning me-2'),
+            c.Link(components=[c.Text(text='👤 Регистрация')], on_click=GoToEvent(url='/register'), class_name='btn btn-sm btn-outline-dark')
+        ]
+
     return [
         c.Page(
             components=[
                 c.Heading(text='📝 Мой Дневник & Заметки', level=1),
                 
-                # Ряд навигации (Активные, Архив, Написать)
+                # Ряд навигации
                 c.Link(components=[c.Text(text='📝 Активные записи')], on_click=GoToEvent(url='/'), class_name='btn btn-sm btn-primary me-2'),
                 c.Link(components=[c.Text(text='🗂 Открыть архив')], on_click=GoToEvent(url='/archive'), class_name='btn btn-sm btn-secondary me-2'),
                 c.Link(components=[c.Text(text='➕ Написать новую заметку')], on_click=GoToEvent(url='/add'), class_name='btn btn-sm btn-success me-4'),
                 
-                # ДОБАВИЛИ КНОПКИ АВТОРИЗАЦИИ: Теперь они физически есть в коде!
-                c.Link(components=[c.Text(text='🔑 Войти')], on_click=GoToEvent(url='/login'), class_name='btn btn-sm btn-warning me-2'),
-                c.Link(components=[c.Text(text='👤 Регистрация')], on_click=GoToEvent(url='/register'), class_name='btn btn-sm btn-outline-dark'),
+                # ВСТАВИЛИ ДИНАМИЧЕСКИЕ КНОПКИ АВТОРИЗАЦИИ
+                *auth_components,
                 
                 c.Div(components=[], class_name='mt-4'),
                 c.Heading(text='Ваши записи', level=3) if notes_for_table else c.Paragraph(text='Активных записей нет.'),
@@ -72,7 +110,6 @@ def notes_list_page(db: Session = Depends(get_db)) -> list[AnyComponent]:
             ]
         )
     ]
-
 
 
 @app.get('/api/register', response_model=FastUI, response_model_exclude_none=True)
@@ -270,6 +307,13 @@ def handle_login(
     # ЗАПОМИНАЕМ ПОЛЬЗОВАТЕЛЯ: Пишем зашифрованный ID в браузер
     set_user_session(response, user.id)
     
+    return [c.FireEvent(event=GoToEvent(url='/'))]
+
+
+@app.get('/api/logout', response_model=FastUI, response_model_exclude_none=True)
+def handle_logout(response: Response) -> list[AnyComponent]:
+    '''Удаляет Cookie-сессию из браузера и разлогинивает пользователя.'''
+    response.delete_cookie('diary_session')
     return [c.FireEvent(event=GoToEvent(url='/'))]
 
 
