@@ -42,12 +42,19 @@ def notes_list_page(request: Request, db: Session = Depends(get_db)) -> list[Any
     if user_id:
         user = db.query(models.User).filter(models.User.id == user_id).first()
 
-    if user_id and user:
-        auth_components = [
-            c.Paragraph(text=f'👤 {user.email}', class_name='text-muted me-2 d-inline'),
-            c.Link(components=[c.Text(text='🚪 Выйти')], on_click=GoToEvent(url='/logout'), class_name='btn btn-sm btn-danger me-2'),
-            c.Link(components=[c.Text(text='❌ Удалить аккаунт')], on_click=GoToEvent(url='/delete-account'), class_name='btn btn-sm btn-outline-danger')
-        ]
+        if user_id and user:
+            auth_components = [
+                c.Paragraph(text=f'👤 {user.email}', class_name='text-muted me-2 d-inline'),
+                c.Link(components=[c.Text(text='🚪 Выйти')], on_click=GoToEvent(url='/logout'), class_name='btn btn-sm btn-danger me-2'),
+                c.Link(components=[c.Text(text='❌ Удалить аккаунт')], on_click=GoToEvent(url='/delete-account'), class_name='btn btn-sm btn-outline-danger me-2')
+            ]
+        
+        # ИСПРАВЛЕНО: Если зашел главный админ, добавляем ему кнопку перехода в админку!
+        if user.email == 'admin@i.ua':
+            auth_components.append(
+                c.Link(components=[c.Text(text='👥 Админка')], on_click=GoToEvent(url='/users'), class_name='btn btn-sm btn-secondary')
+            )
+
         db_notes = db.query(models.Note).filter(models.Note.is_archived == False, models.Note.user_id == user_id).order_by(models.Note.created_at.desc()).all()
         for note in db_notes:
             pydantic_note = NoteReadSchema.model_validate(note)
