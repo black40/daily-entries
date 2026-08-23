@@ -27,3 +27,11 @@ class UserLoginSchema(BaseModel):
     '''Форма входа в приложение.'''
     email: str = Field(title='Электронная почта')
     password: SecretStr = Field(title='Пароль')
+
+class UserReadSchema(BaseModel):
+    '''Схема для вывода списка пользователей в админской таблице.'''
+    id: int
+    email: str
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
