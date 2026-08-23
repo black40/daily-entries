@@ -54,27 +54,43 @@ def archive_list_page(request: Request, db: Session = Depends(get_db)) -> list[A
 
 
 @router.get('/note/{note_id}/archive-run', response_model=FastUI, response_model_exclude_none=True)
-def handle_archive_note(note_id: int, db: Session = Depends(get_db)) -> list[AnyComponent]:
+def handle_archive_note(note_id: int, request: Request, db: Session = Depends(get_db)) -> list[AnyComponent]:
+    '''Перевод заметки в архив с жесткой проверкой владельца.'''
+    user_id = get_user_from_session(request)
+    if not user_id:
+        return [c.FireEvent(event=GoToEvent(url='/login'))]
+
     db_note = db.query(models.Note).filter(models.Note.id == note_id).first()
-    if db_note:
+    # Защита: проверяем, что заметка существует и принадлежит именно этому пользователю
+    if db_note and db_note.user_id == user_id:
         db_note.is_archived = True
         db.commit()
     return [c.FireEvent(event=GoToEvent(url='/'))]
 
 
 @router.get('/note/{note_id}/unarchive-run', response_model=FastUI, response_model_exclude_none=True)
-def handle_unarchive_note(note_id: int, db: Session = Depends(get_db)) -> list[AnyComponent]:
+def handle_unarchive_note(note_id: int, request: Request, db: Session = Depends(get_db)) -> list[AnyComponent]:
+    '''Извлечение заметки из архива с жесткой проверкой владельца.'''
+    user_id = get_user_from_session(request)
+    if not user_id:
+        return [c.FireEvent(event=GoToEvent(url='/login'))]
+
     db_note = db.query(models.Note).filter(models.Note.id == note_id).first()
-    if db_note:
+    if db_note and db_note.user_id == user_id:
         db_note.is_archived = False
         db.commit()
     return [c.FireEvent(event=GoToEvent(url='/archive'))]
 
 
 @router.get('/note/{note_id}/delete-run', response_model=FastUI, response_model_exclude_none=True)
-def handle_delete_note(note_id: int, db: Session = Depends(get_db)) -> list[AnyComponent]:
+def handle_delete_note(note_id: int, request: Request, db: Session = Depends(get_db)) -> list[AnyComponent]:
+    '''Физическое удаление заметки с жесткой проверкой владельца.'''
+    user_id = get_user_from_session(request)
+    if not user_id:
+        return [c.FireEvent(event=GoToEvent(url='/login'))]
+
     db_note = db.query(models.Note).filter(models.Note.id == note_id).first()
-    if db_note:
+    if db_note and db_note.user_id == user_id:
         db.delete(db_note)
         db.commit()
     return [c.FireEvent(event=GoToEvent(url='/archive'))]
