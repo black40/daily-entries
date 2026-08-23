@@ -157,9 +157,21 @@ def handle_delete_account(request: Request, response: Response, db: Session = De
 
 
 @app.get('/api/users', response_model=FastUI, response_model_exclude_none=True)
-def admin_users_page(db: Session = Depends(get_db)) -> list[AnyComponent]:
+def admin_users_page(request: Request, db: Session = Depends(get_db)) -> list[AnyComponent]:
+    '''Служебная страница для просмотра всех зарегистрированных пользователей (доступна только админу).'''
+    # 1. Читаем текущую сессию
+    user_id = get_user_from_session(request)
+    user = db.query(models.User).filter(models.User.id == user_id).first() if user_id else None
+    
+    # 2. ИСПРАВЛЕНО: Если пользователь не вошел или его email не админский, разворачиваем на главную
+    # Впишите сюда свой реальный email, под которым будете администрировать систему
+    if not user or user.email != 'admin@i.ua':
+        return [c.FireEvent(event=GoToEvent(url='/'))]
+
+    # 3. Если проверку прошел — загружаем список
     db_users = db.query(models.User).order_by(models.User.id.asc()).all()
-    users_for_table = [UserReadSchema.model_validate(user) for user in db_users]
+    users_for_table = [UserReadSchema.model_validate(user_item) for user_item in db_users]
+
     return [
         c.Page(
             components=[
@@ -167,11 +179,14 @@ def admin_users_page(db: Session = Depends(get_db)) -> list[AnyComponent]:
                 c.Link(components=[c.Text(text='🔙 На главную')], on_click=GoToEvent(url='/'), class_name='btn btn-secondary mb-3'),
                 c.Div(components=[], class_name='mt-4'),
                 c.Heading(text=f'Всего зарегистрировано: {len(users_for_table)}', level=4),
-                c.Table(data=users_for_table, columns=[
-                    DisplayLookup(field='id', title='ID'),
-                    DisplayLookup(field='email', title='Email (Логин)'),
-                    DisplayLookup(field='created_at', title='Дата регистрации', mode=DisplayMode.date),
-                ]) if users_for_table else c.Paragraph(text='Пользователей в базе данных пока нет.')
+                c.Table(
+                    data=users_for_table,
+                    columns=[
+                        DisplayLookup(field='id', title='ID'),
+                        DisplayLookup(field='email', title='Email (Логин)'),
+                        DisplayLookup(field='created_at', title='Дата регистрации', mode=DisplayMode.date),
+                    ]
+                ) if users_for_table else c.Paragraph(text='Пользователей в базе данных пока нет.')
             ]
         )
     ]

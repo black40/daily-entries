@@ -37,7 +37,8 @@ class Note(Base):
     is_archived: Mapped[bool] = mapped_column(Boolean, default=False)
     
     # ВНЕШНИЙ КЛЮЧ: привязываем заметку к конкретному пользователю
-    user_id: Mapped[int] = mapped_column(ForeignKey('users.id', ondelete='CASCADE'), nullable=False)
+        # ИСПРАВЛЕНО: Добавлен index=True для быстрого поиска заметок по пользователю
+    user_id: Mapped[int] = mapped_column(ForeignKey('users.id', ondelete='CASCADE'), nullable=False, index=True)
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), 
