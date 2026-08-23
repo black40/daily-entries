@@ -34,6 +34,7 @@ async def sliding_session_middleware(request: Request, call_next):
 
 @app.get('/api/', response_model=FastUI, response_model_exclude_none=True)
 def notes_list_page(request: Request, db: Session = Depends(get_db)) -> list[AnyComponent]:
+    '''Главная страница: полноценный макет сайта с Header, Sidebar, Content и Footer через Bootstrap.'''
     user_id = get_user_from_session(request)
     auth_components = []
     notes_for_table = []
@@ -42,36 +43,35 @@ def notes_list_page(request: Request, db: Session = Depends(get_db)) -> list[Any
     if user_id:
         user = db.query(models.User).filter(models.User.id == user_id).first()
 
-        if user_id and user:
-            auth_components = [
-                c.Paragraph(text=f'👤 {user.email}', class_name='text-muted me-2 d-inline'),
-                c.Link(components=[c.Text(text='🚪 Выйти')], on_click=GoToEvent(url='/logout'), class_name='btn btn-sm btn-danger me-2'),
-                c.Link(components=[c.Text(text='❌ Удалить аккаунт')], on_click=GoToEvent(url='/delete-account'), class_name='btn btn-sm btn-outline-danger me-2')
-            ]
-        
-        # ИСПРАВЛЕНО: Если зашел главный админ, добавляем ему кнопку перехода в админку!
+    # Компоненты авторизации для правого угла Хедера
+    if user_id and user:
+        auth_components = [
+            c.Paragraph(text=f'👤 {user.email}', class_name='text-muted me-2 d-inline small'),
+            c.Link(components=[c.Text(text='🚪 Выйти')], on_click=GoToEvent(url='/logout'), class_name='btn btn-sm btn-danger me-2'),
+            c.Link(components=[c.Text(text='❌ Удалить аккаунт')], on_click=GoToEvent(url='/delete-account'), class_name='btn btn-sm btn-outline-danger me-2')
+        ]
         if user.email == 'admin@i.ua':
             auth_components.append(
                 c.Link(components=[c.Text(text='👥 Админка')], on_click=GoToEvent(url='/users'), class_name='btn btn-sm btn-secondary')
             )
-
+        
         db_notes = db.query(models.Note).filter(models.Note.is_archived == False, models.Note.user_id == user_id).order_by(models.Note.created_at.desc()).all()
-        for note in db_notes:
-            pydantic_note = NoteReadSchema.model_validate(note)
-            pydantic_note.archive_action = '📦 В архив'
-            notes_for_table.append(pydantic_note)
+        notes_for_table = [NoteReadSchema.model_validate(note) for note in db_notes]
+        for n in notes_for_table:
+            n.archive_action = '📦 В архив'
     else:
         auth_components = [
-            c.Paragraph(text='👤 Гость', class_name='text-muted me-3 d-inline'),
+            c.Paragraph(text='👤 Гость', class_name='text-muted me-3 d-inline small'),
             c.Link(components=[c.Text(text='🔑 Войти')], on_click=GoToEvent(url='/login'), class_name='btn btn-sm btn-warning me-2'),
             c.Link(components=[c.Text(text='👤 Регистрация')], on_click=GoToEvent(url='/register'), class_name='btn btn-sm btn-outline-dark')
         ]
 
-    main_content = []
+    # Сборка тела приложения (CONTENT)
+    content_components = []
     if user_id and user:
-        main_content.append(c.Heading(text='Ваши активные записи', level=3))
+        content_components.append(c.Heading(text='Ваши активные записи', level=3, class_name='mb-3'))
         if notes_for_table:
-            main_content.append(
+            content_components.append(
                 c.Table(data=notes_for_table, columns=[
                     DisplayLookup(field='title', title='Название', on_click=GoToEvent(url='/note/{id}')),
                     DisplayLookup(field='created_at', title='Дата создания', mode=DisplayMode.date),
@@ -79,20 +79,67 @@ def notes_list_page(request: Request, db: Session = Depends(get_db)) -> list[Any
                 ])
             )
         else:
-            main_content.append(c.Paragraph(text='Активных записей нет. Нажмите зеленую кнопку выше, чтобы написать первую!'))
+            content_components.append(c.Paragraph(text='Активных записей нет. Создайте свою первую категорию слева и напишите заметку!'))
     else:
-        main_content.append(c.Paragraph(text='Пожалуйста, войдите в свой аккаунт, чтобы просматривать и создавать личные заметки.'))
+        content_components.append(c.Paragraph(text='Пожалуйста, войдите в свой аккаунт, чтобы просматривать и создавать личные заметки.', class_name='alert alert-info'))
 
+    # Сборка всей страницы (LAYOUT через валидные c.Div)
     return [
         c.Page(
             components=[
-                c.Heading(text='📝 Мой Дневник & Заметки', level=1),
-                c.Link(components=[c.Text(text='📝 Active')], on_click=GoToEvent(url='/'), class_name='btn btn-sm btn-primary me-2'),
-                c.Link(components=[c.Text(text='🗂 Архив')], on_click=GoToEvent(url='/archive'), class_name='btn btn-sm btn-secondary me-2'),
-                c.Link(components=[c.Text(text='➕ Написать')], on_click=GoToEvent(url='/add'), class_name='btn btn-sm btn-success me-4'),
-                *auth_components,
-                c.Div(components=[], class_name='mt-4'),
-                *main_content
+                # 1. HEADER (Шапка сайта)
+                c.Div(
+                    components=[
+                        c.Link(components=[c.Heading(text='📝 Дневник SaaS', level=3, class_name='m-0 text-dark')], on_click=GoToEvent(url='/')),
+                        c.Div(components=auth_components, class_name='d-flex align-items-center')
+                    ],
+                    class_name='d-flex justify-content-between align-items-center p-3 mb-4 bg-light border-bottom'
+                ),
+                
+                # 2. ОСНОВНАЯ СЕТКА (Sidebar + Content через Bootstrap классы)
+                c.Div(
+                    components=[
+                        c.Div(
+                            components=[
+                                # ЛЕВАЯ КОЛОНКА: SIDEBAR (Заменили c.Col на c.Div с классом col-md-3)
+                                c.Div(
+                                    components=[
+                                        c.Link(components=[c.Text(text='➕ Написать заметку')], on_click=GoToEvent(url='/add'), class_name='btn btn-success w-100 mb-2') if user_id else c.Div(components=[]),
+                                        c.Link(components=[c.Text(text='🗂 Открыть архив')], on_click=GoToEvent(url='/archive'), class_name='btn btn-outline-secondary w-100 mb-4') if user_id else c.Div(components=[]),
+                                        
+                                        c.Heading(text='📂 Категории', level=4, class_name='mb-2'),
+                                        c.Div(
+                                            components=[
+                                                c.Paragraph(text='📋 Личное', class_name='p-2 bg-white rounded border mb-1 small'),
+                                                c.Paragraph(text='💼 Работа', class_name='p-2 bg-white rounded border mb-1 small'),
+                                                c.Paragraph(text='💡 Идеи', class_name='p-2 bg-white rounded border mb-3 small'),
+                                                c.Link(components=[c.Text(text='⚙️ Настроить категории')], on_click=GoToEvent(url='/categories'), class_name='btn btn-sm btn-link p-0') if user_id else c.Div(components=[])
+                                            ],
+                                            class_name='p-3 bg-light rounded border'
+                                        )
+                                    ],
+                                    class_name='col-md-3 border-end pe-3'
+                                ),
+                                
+                                # ПРАВАЯ КОЛОНКА: MAIN CONTENT (Заменили c.Col на c.Div с классом col-md-9)
+                                c.Div(
+                                    components=content_components,
+                                    class_name='col-md-9'
+                                )
+                            ],
+                            class_name='row'  # Задали Bootstrap-строку через класс
+                        )
+                    ],
+                    class_name='container-fluid mb-5'
+                ),
+                
+                # 3. FOOTER (Подвал сайта)
+                c.Div(
+                    components=[
+                        c.Paragraph(text='© 2026 Личный Дневник SaaS. Все права защищены. Бла бла бла...', class_name='text-muted text-center m-0 small')
+                    ],
+                    class_name='p-3 mt-auto bg-light border-top fixed-bottom'
+                )
             ]
         )
     ]
