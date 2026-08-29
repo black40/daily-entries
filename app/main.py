@@ -239,11 +239,44 @@ def admin_users_page(request: Request, db: Session = Depends(get_db)) -> list[An
                         DisplayLookup(field='id', title='ID'),
                         DisplayLookup(field='email', title='Email (Логин)'),
                         DisplayLookup(field='created_at', title='Дата регистрации', mode=DisplayMode.date),
+                        # ИСПРАВЛЕНО: Добавили колонку с кнопкой удаления и роутом действия
+                        DisplayLookup(
+                            field='delete_action', 
+                            title='Действие', 
+                            on_click=GoToEvent(url='/users/{id}/delete-run')
+                        ),
                     ]
                 ) if users_for_table else c.Paragraph(text='Пользователей в базе данных пока нет.')
             ]
         )
     ]
+
+@app.get('/api/users/{user_to_delete_id}/delete-run', response_model=FastUI, response_model_exclude_none=True)
+def handle_admin_delete_user(
+    user_to_delete_id: int, 
+    request: Request, 
+    db: Session = Depends(get_db)
+) -> list[AnyComponent]:
+    '''Админский роут: удаляет выбранного пользователя и каскадом все его заметки.'''
+    # 1. Проверяем, что текущий пользователь — действительно главный админ
+    current_user_id = get_user_from_session(request)
+    current_user = db.query(models.User).filter(models.User.id == current_user_id).first() if current_user_id else None
+    
+    if not current_user or current_user.email != 'admin@i.ua':  # Используем ваш реальный email!
+        return [c.FireEvent(event=GoToEvent(url='/'))]
+        
+    # 2. Не даем админу случайно удалить самого себя (защита от выстрела в ногу)
+    if user_to_delete_id == current_user.id:
+        raise HTTPException(status_code=400, detail='Вы не можете удалить свой собственный аккаунт администратора!')
+
+    # 3. Находим жертву и удаляем
+    user_target = db.query(models.User).filter(models.User.id == user_to_delete_id).first()
+    if user_target:
+        db.delete(user_target)
+        db.commit()
+        
+    # Возвращаем админа на обновленную страницу списка пользователей
+    return [c.FireEvent(event=GoToEvent(url='/users'))]
 
 
 @app.post('/api/add', response_model=FastUI, response_model_exclude_none=True)

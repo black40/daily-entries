@@ -33,5 +33,8 @@ class UserReadSchema(BaseModel):
     id: int
     email: str
     created_at: datetime
+    
+    # ИСПРАВЛЕНО: Добавили поле кнопки удаления для таблицы FastUI
+    delete_action: str = '❌ Удалить'
 
     model_config = ConfigDict(from_attributes=True)

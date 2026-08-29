@@ -3,32 +3,31 @@ from pathlib import Path
 from sqlalchemy import create_engine, event
 from sqlalchemy.orm import DeclarativeBase, sessionmaker
 
-# 1. Получаем строку подключения из переменных окружения (для продакшена)
+# 1. Получаем строку подключения из переменных окружения
 raw_url = os.getenv('DATABASE_URL', 'sqlite:///./data/notes_app.db')
 
-# 2. ИСПРАВЛЕНО: Безопасно вычисляем абсолютный путь к папке и файлу базы через Path
+# 2. Безопасно вычисляем абсолютный путь к папке и файлу базы через Path
 if raw_url.startswith('sqlite:///'):
-    # Отрезаем sqlite:/// и превращаем остаток в полноценный объект пути Path
-    # .resolve() превратит относительный путь './data/...' в железный абсолютный адрес
+    # Отрезаем sqlite:/// и вычисляем чистый абсолютный путь
     db_file_path = Path(raw_url.replace('sqlite:///', '')).resolve()
-    # Собираем эталонную строку подключения для движка
-    DATABASE_URL = f'sqlite:///{db_file_path}'
+    # .as_posix() гарантирует правильный строковый формат пути без дублирования слэшей
+    DATABASE_URL = f'sqlite:///{db_file_path.as_posix()}'
 else:
     db_file_path = None
     DATABASE_URL = raw_url
 
-# 3. Автоматически создаем папку со всеми родительскими директориями, если её нет
+# 3. Автоматически создаем папку для базы данных, если её нет
 if db_file_path:
     db_dir = db_file_path.parent
     db_dir.mkdir(parents=True, exist_ok=True)
 
-# 4. Инициализируем движок SQLAlchemy (используем проверенную строку подключения)
+# 4. Инициализируем движок SQLAlchemy
 engine = create_engine(
     DATABASE_URL, 
     connect_args={'check_same_thread': False} if DATABASE_URL.startswith('sqlite') else {}
 )
 
-# Оптимизации производительности SQLite для продакшена (Ваши Pragma-настройки в полной сохранности!)
+# Оптимизации производительности SQLite для продакшена (Pragma-настройки)
 @event.listens_for(engine, 'connect')
 def set_sqlite_pragma(dbapi_connection, connection_record):
     cursor = dbapi_connection.cursor()
