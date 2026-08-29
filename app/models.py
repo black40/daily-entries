@@ -21,12 +21,36 @@ class User(Base):
         server_default=func.now()
     )
 
-    # Связь «Один ко многим»: у одного пользователя может быть много заметок
+    # Связи: у одного пользователя может быть много заметок и много категорий
     notes: Mapped[List['Note']] = relationship(back_populates='user', cascade='all, delete-orphan')
+    # НОВОЕ: Каскадно удаляем категории пользователя, если удаляется сам аккаунт
+    categories: Mapped[List['Category']] = relationship(back_populates='user', cascade='all, delete-orphan')
+
+
+class Category(Base):
+    '''Модель категорий для группировки заметок (Сайдбар).'''
+    __tablename__ = 'categories'
+
+    model_config = {'from_attributes': True}
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(50), nullable=False)
+    
+    # Привязываем категорию к конкретному пользователю
+    user_id: Mapped[int] = mapped_column(ForeignKey('users.id', ondelete='CASCADE'), nullable=False, index=True)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), 
+        server_default=func.now()
+    )
+
+    # Связи для SQLAlchemy
+    user: Mapped['User'] = relationship(back_populates='categories')
+    notes: Mapped[List['Note']] = relationship(back_populates='category')
 
 
 class Note(Base):
-    '''Модель для ежедневных записок и дневника с привязкой к пользователю.'''
+    '''Модель для ежедневных записок и дневника с привязкой к пользователю и категории.'''
     __tablename__ = 'notes'
 
     model_config = {'from_attributes': True}
@@ -36,9 +60,10 @@ class Note(Base):
     content: Mapped[str] = mapped_column(Text)
     is_archived: Mapped[bool] = mapped_column(Boolean, default=False)
     
-    # ВНЕШНИЙ КЛЮЧ: привязываем заметку к конкретному пользователю
-        # ИСПРАВЛЕНО: Добавлен index=True для быстрого поиска заметок по пользователю
+    # Внешние ключи
     user_id: Mapped[int] = mapped_column(ForeignKey('users.id', ondelete='CASCADE'), nullable=False, index=True)
+    # НОВОЕ: Связь с категорией (nullable=True, чтобы заметка могла существовать без категории)
+    category_id: Mapped[Optional[int]] = mapped_column(ForeignKey('categories.id', ondelete='SET NULL'), nullable=True, index=True)
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), 
@@ -50,8 +75,9 @@ class Note(Base):
         onupdate=func.now()
     )
 
-    # Обратная связь для SQLAlchemy
+    # Обратные связи для SQLAlchemy
     user: Mapped['User'] = relationship(back_populates='notes')
+    category: Mapped[Optional['Category']] = relationship(back_populates='notes')
 
 
 class WishItem(Base):
