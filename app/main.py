@@ -24,26 +24,33 @@ app.include_router(notes_router)
 
 @app.middleware('http')
 async def sliding_session_middleware(request: Request, call_next):
+    '''Промежуточный слой, который сдвигает срок годности Cookie при каждом клике.'''
     response = await call_next(request)
-    if '/logout' in request.url.path:
+    
+    # ИСПРАВЛЕНО: Если пользователь выходит или только входит, мы ЖЕЛЕЗНО не трогаем сессию в middleware!
+    if '/logout' in request.url.path or '/login' in request.url.path:
         return response
+        
+    # Для всех остальных страниц (кроме иконок) кука плавно скользит вперед
     if not request.url.path.startswith('/favicon.ico'):
         refresh_user_session(request, response)
+        
     return response
 
 
 @app.get('/api/', response_model=FastUI, response_model_exclude_none=True)
 def notes_list_page(request: Request, db: Session = Depends(get_db)) -> list[AnyComponent]:
-    '''Главная страница: полноценный макет сайта с Header, Sidebar, Content и Footer через Bootstrap.'''
+    '''Главная страница: динамический вывод заметок и категорий в сайдбаре.'''
     user_id = get_user_from_session(request)
     auth_components = []
     notes_for_table = []
+    sidebar_categories = []
     user = None
 
     if user_id:
         user = db.query(models.User).filter(models.User.id == user_id).first()
 
-    # Компоненты авторизации для правого угла Хедера
+    # Сборка компонентов авторизации хедера
     if user_id and user:
         auth_components = [
             c.Paragraph(text=f'👤 {user.email}', class_name='text-muted me-2 d-inline small'),
@@ -55,10 +62,18 @@ def notes_list_page(request: Request, db: Session = Depends(get_db)) -> list[Any
                 c.Link(components=[c.Text(text='👥 Админка')], on_click=GoToEvent(url='/users'), class_name='btn btn-sm btn-secondary')
             )
         
+        # Подгружаем активные заметки пользователя
         db_notes = db.query(models.Note).filter(models.Note.is_archived == False, models.Note.user_id == user_id).order_by(models.Note.created_at.desc()).all()
         notes_for_table = [NoteReadSchema.model_validate(note) for note in db_notes]
         for n in notes_for_table:
             n.archive_action = '📦 В архив'
+            
+        # НОВОЕ: Подгружаем реальные категории пользователя из SQLite!
+        db_categories = db.query(models.Category).filter(models.Category.user_id == user_id).order_by(models.Category.name.asc()).all()
+        for cat in db_categories:
+            sidebar_categories.append(
+                c.Paragraph(text=f'📁 {cat.name}', class_name='p-2 bg-white rounded border mb-1 small')
+            )
     else:
         auth_components = [
             c.Paragraph(text='👤 Гость', class_name='text-muted me-3 d-inline small'),
@@ -66,7 +81,7 @@ def notes_list_page(request: Request, db: Session = Depends(get_db)) -> list[Any
             c.Link(components=[c.Text(text='👤 Регистрация')], on_click=GoToEvent(url='/register'), class_name='btn btn-sm btn-outline-dark')
         ]
 
-    # Сборка тела приложения (CONTENT)
+    # Сборка центрального контента (CONTENT)
     content_components = []
     if user_id and user:
         content_components.append(c.Heading(text='Ваши активные записи', level=3, class_name='mb-3'))
@@ -79,15 +94,18 @@ def notes_list_page(request: Request, db: Session = Depends(get_db)) -> list[Any
                 ])
             )
         else:
-            content_components.append(c.Paragraph(text='Активных записей нет. Создайте свою первую категорию слева и напишите заметку!'))
+            content_components.append(c.Paragraph(text='Активных записей нет. Создайте первую категорию и напишите заметку!'))
     else:
         content_components.append(c.Paragraph(text='Пожалуйста, войдите в свой аккаунт, чтобы просматривать и создавать личные заметки.', class_name='alert alert-info'))
 
-    # Сборка всей страницы (LAYOUT через валидные c.Div)
+    # Формируем блок категорий для сайдбара
+    if not sidebar_categories and user_id:
+        sidebar_categories.append(c.Paragraph(text='Категорий пока нет', class_name='text-muted small italic mb-3'))
+
     return [
         c.Page(
             components=[
-                # 1. HEADER (Шапка сайта)
+                # HEADER
                 c.Div(
                     components=[
                         c.Link(components=[c.Heading(text='📝 Дневник SaaS', level=3, class_name='m-0 text-dark')], on_click=GoToEvent(url='/')),
@@ -95,13 +113,12 @@ def notes_list_page(request: Request, db: Session = Depends(get_db)) -> list[Any
                     ],
                     class_name='d-flex justify-content-between align-items-center p-3 mb-4 bg-light border-bottom'
                 ),
-                
-                # 2. ОСНОВНАЯ СЕТКА (Sidebar + Content через Bootstrap классы)
+                # GRID SYSTEM
                 c.Div(
                     components=[
                         c.Div(
                             components=[
-                                # ЛЕВАЯ КОЛОНКА: SIDEBAR (Заменили c.Col на c.Div с классом col-md-3)
+                                # SIDEBAR
                                 c.Div(
                                     components=[
                                         c.Link(components=[c.Text(text='➕ Написать заметку')], on_click=GoToEvent(url='/add'), class_name='btn btn-success w-100 mb-2') if user_id else c.Div(components=[]),
@@ -109,35 +126,25 @@ def notes_list_page(request: Request, db: Session = Depends(get_db)) -> list[Any
                                         
                                         c.Heading(text='📂 Категории', level=4, class_name='mb-2'),
                                         c.Div(
-                                            components=[
-                                                c.Paragraph(text='📋 Личное', class_name='p-2 bg-white rounded border mb-1 small'),
-                                                c.Paragraph(text='💼 Работа', class_name='p-2 bg-white rounded border mb-1 small'),
-                                                c.Paragraph(text='💡 Идеи', class_name='p-2 bg-white rounded border mb-3 small'),
-                                                c.Link(components=[c.Text(text='⚙️ Настроить категории')], on_click=GoToEvent(url='/categories'), class_name='btn btn-sm btn-link p-0') if user_id else c.Div(components=[])
-                                            ],
+                                            components=sidebar_categories + ([
+                                                c.Link(components=[c.Text(text='⚙️ Настроить категории')], on_click=GoToEvent(url='/categories'), class_name='btn btn-sm btn-link p-0 mt-2')
+                                            ] if user_id else []),
                                             class_name='p-3 bg-light rounded border'
                                         )
                                     ],
                                     class_name='col-md-3 border-end pe-3'
                                 ),
-                                
-                                # ПРАВАЯ КОЛОНКА: MAIN CONTENT (Заменили c.Col на c.Div с классом col-md-9)
-                                c.Div(
-                                    components=content_components,
-                                    class_name='col-md-9'
-                                )
+                                # CONTENT
+                                c.Div(components=content_components, class_name='col-md-9')
                             ],
-                            class_name='row'  # Задали Bootstrap-строку через класс
+                            class_name='row'
                         )
                     ],
                     class_name='container-fluid mb-5'
                 ),
-                
-                # 3. FOOTER (Подвал сайта)
+                # FOOTER
                 c.Div(
-                    components=[
-                        c.Paragraph(text='© 2026 Личный Дневник SaaS. Все права защищены. Бла бла бла...', class_name='text-muted text-center m-0 small')
-                    ],
+                    components=[c.Paragraph(text='© 2026 Личный Дневник SaaS. Все права защищены. Бла бла бла...', class_name='text-muted text-center m-0 small')],
                     class_name='p-3 mt-auto bg-light border-top fixed-bottom'
                 )
             ]
