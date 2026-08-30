@@ -1,4 +1,5 @@
 from fastapi import FastAPI, Depends, HTTPException, Request, Response
+from fastapi import Form
 from fastapi.responses import HTMLResponse
 from sqlalchemy.orm import Session
 
@@ -287,12 +288,38 @@ def handle_admin_delete_user(
 
 
 @app.post('/api/add', response_model=FastUI, response_model_exclude_none=True)
-def handle_add_note(request: Request, form: NoteCreateSchema = fastui_form(NoteCreateSchema), db: Session = Depends(get_db)) -> list[AnyComponent]:
+def handle_add_note(
+    request: Request,
+    title: str = Form(...),
+    content: str = Form(...),
+    category_id: str = Form(...),  # Прилетает в виде строки ('0', '1', '2')
+    db: Session = Depends(get_db)
+) -> list[AnyComponent]:
+    '''Обработчик добавления заметки: конвертирует строковый ID категории в число для SQLite.'''
     user_id = get_user_from_session(request)
     if not user_id:
         return [c.FireEvent(event=GoToEvent(url='/login'))]
-    db.add(models.Note(title=form.title, content=form.content, user_id=user_id))
+
+    # ИСПРАВЛЕНО: Конвертируем строковый ID категории в чистое число.
+    # Если пришел '0' (Без категории), записываем в базу None.
+    # Если пришло число ('1', '2') — превращаем в int, чтобы SQLAlchemy правильно связала таблицы!
+    parsed_category_id = None
+    if category_id and category_id != '0':
+        try:
+            parsed_category_id = int(category_id)
+        except ValueError:
+            parsed_category_id = None
+
+    # Создаем запись с идеально провалидированными типами данных
+    new_note = models.Note(
+        title=title,
+        content=content,
+        user_id=user_id,
+        category_id=parsed_category_id  # Теперь сюда пишется легальный int или None
+    )
+    db.add(new_note)
     db.commit()
+    
     return [c.FireEvent(event=GoToEvent(url='/'))]
 
 

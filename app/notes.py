@@ -10,6 +10,7 @@ from app.database import get_db
 from app.session import get_user_from_session
 import app.models as models
 from app.schemas import NoteCreateSchema, NoteReadSchema, CategoryCreateSchema
+from fastui.components.forms import FormFieldInput, FormFieldSelect, FormFieldTextarea  # <-- ДОБАВЬТЕ ЭТОТ ИМПОРТ НАВЕРХ ФАЙЛА, если линтер ругается
 
 # Создаем дочерний роутер для заметок
 router = APIRouter(prefix='/api')
@@ -99,6 +100,7 @@ def handle_delete_note(note_id: int, request: Request, db: Session = Depends(get
 
 @router.get('/note/{note_id}', response_model=FastUI, response_model_exclude_none=True)
 def view_note_page(note_id: int, request: Request, db: Session = Depends(get_db)) -> list[AnyComponent]:
+    '''Страница детального просмотра: выводит реальное название заметки без технических ID.'''
     user_id = get_user_from_session(request)
     db_note = db.query(models.Note).filter(models.Note.id == note_id).first()
     if not db_note:
@@ -107,12 +109,24 @@ def view_note_page(note_id: int, request: Request, db: Session = Depends(get_db)
     if user_id and db_note.user_id != user_id:
         return [c.FireEvent(event=GoToEvent(url='/'))]
     
+    category_text = f'📁 {db_note.category.name}' if db_note.category else '📝 Без категории'
+    
     note = NoteReadSchema.model_validate(db_note)
+    note.category_name = category_text
+    
     return [
         c.Page(
             components=[
-                c.Heading(text=note.title, level=1),
-                c.Paragraph(text=f'Дата создания: {note.created_at.strftime("%d.%m.%Y %H:%M")}'),
+                # ИСПРАВЛЕНО: Жестко прописали db_note.title. 
+                # Теперь здесь будет выводиться реальный заголовок (например, "Мой день"), а не безликая цифра 4!
+                c.Heading(text=db_note.title, level=1, class_name='mb-2'),
+                
+                # Дата создания и категория
+                c.Paragraph(
+                    text=f'Дата создания: {note.created_at.strftime("%d.%m.%Y %H:%M")} | Категория: {note.category_name}', 
+                    class_name='text-muted small mb-4'
+                ),
+                
                 c.Link(components=[c.Text(text='🔙 Назад к списку')], on_click=GoToEvent(url='/'), class_name='btn btn-secondary mb-3'),
                 c.Div(components=[], class_name='my-4 p-4 bg-light rounded border'),
                 c.Markdown(text=note.content),
@@ -122,14 +136,42 @@ def view_note_page(note_id: int, request: Request, db: Session = Depends(get_db)
 
 
 @router.get('/add', response_model=FastUI, response_model_exclude_none=True)
-def add_note_page() -> list[AnyComponent]:
+def add_note_page(request: Request, db: Session = Depends(get_db)) -> list[AnyComponent]:
+    '''Страница создания новой заметки с ручной сборкой формы без ошибок Pydantic.'''
+    user_id = get_user_from_session(request)
+    if not user_id:
+        return [c.FireEvent(event=GoToEvent(url='/login'))]
+
+    # 1. Загружаем все категории текущего пользователя
+    db_categories = db.query(models.Category).filter(models.Category.user_id == user_id).order_by(models.Category.name.asc()).all()
+    
+    # 2. Формируем список опций в формате FastUI Select: [{'value': '0', 'label': 'Текст'}]
+    select_options = [{'value': '0', 'label': 'Без категории'}]
+    for cat in db_categories:
+        select_options.append({'value': str(cat.id), 'label': f'📁 {cat.name}'})
+
     return [
         c.Page(
             components=[
-                c.Heading(text='✏️ Новая запись', level=1),
-                c.Link(components=[c.Text(text='🔙 Отмена')], on_click=GoToEvent(url='/'), class_name='btn btn-secondary mb-3'),
+                c.Heading(text='✏️ Новая запись в дневник', level=1),
+                c.Link(components=[c.Text(text='🔙 Отмена')], on_click=GoToEvent(url='/'), class_name='btn btn-secondary mb-4'),
                 c.Div(components=[], class_name='mt-4'),
-                c.ModelForm(model=NoteCreateSchema, submit_url='/api/add')
+                
+                # ИСПРАВЛЕНО: Вместо c.ModelForm собрали форму вручную через c.Form. 
+                # Теперь Pydantic примет структуру без ошибок extra_forbidden!
+                c.Form(
+                    submit_url='/api/add',
+                    form_fields=[
+                        FormFieldInput(name='title', title='Заголовок заметки', required=True),
+                        FormFieldTextarea(name='content', title='Текст заметки', rows=5, required=True),
+                        FormFieldSelect(
+                            name='category_id', 
+                            title='Категория', 
+                            options=select_options,
+                            initial='0'
+                        )
+                    ]
+                )
             ]
         )
     ]
