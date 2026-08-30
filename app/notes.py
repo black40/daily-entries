@@ -4,11 +4,12 @@ from fastui import FastUI, AnyComponent
 from fastui import components as c
 from fastui.components.display import DisplayLookup, DisplayMode
 from fastui.events import GoToEvent
+from fastui.forms import fastui_form
 
 from app.database import get_db
 from app.session import get_user_from_session
 import app.models as models
-from app.schemas import NoteCreateSchema, NoteReadSchema
+from app.schemas import NoteCreateSchema, NoteReadSchema, CategoryCreateSchema
 
 # Создаем дочерний роутер для заметок
 router = APIRouter(prefix='/api')
@@ -132,3 +133,82 @@ def add_note_page() -> list[AnyComponent]:
             ]
         )
     ]
+
+
+@router.get('/categories', response_model=FastUI, response_model_exclude_none=True)
+def categories_management_page(request: Request, db: Session = Depends(get_db)) -> list[AnyComponent]:
+    '''Страница настройки категорий: список и форма добавления.'''
+    user_id = get_user_from_session(request)
+    if not user_id:
+        return [c.FireEvent(event=GoToEvent(url='/login'))]
+
+    # Загружаем все существующие категории этого пользователя
+    db_categories = db.query(models.Category).filter(models.Category.user_id == user_id).order_by(models.Category.name.asc()).all()
+    
+    categories_list = []
+    for cat in db_categories:
+        categories_list.append(
+            c.Paragraph(text=f'📁 {cat.name}', class_name='p-2 bg-white rounded border mb-1 small')
+        )
+
+    return [
+        c.Page(
+            components=[
+                c.Heading(text='⚙️ Настройка ваших категорий', level=1),
+                c.Link(components=[c.Text(text='🔙 На главную')], on_click=GoToEvent(url='/'), class_name='btn btn-secondary mb-4'),
+                
+                c.Div(
+                    components=[
+                        c.Div(
+                            components=[
+                                c.Heading(text='Создать новую категорию', level=3, class_name='mb-3'),
+                                # Форма создания на основе нашей схемы
+                                c.ModelForm(model=CategoryCreateSchema, submit_url='/api/categories')
+                            ],
+                            class_name='col-md-6 border-end pe-4'
+                        ),
+                        c.Div(
+                            components=[
+                                c.Heading(text='Ваши текущие категории', level=3, class_name='mb-3'),
+                                *categories_list
+                            ] if categories_list else [c.Paragraph(text='Вы еще не создали ни одной категории.', class_name='text-muted')],
+                            class_name='col-md-6 ps-4'
+                        )
+                    ],
+                    class_name='row'
+                )
+            ]
+        )
+    ]
+
+
+@router.post('/categories', response_model=FastUI, response_model_exclude_none=True)
+def handle_create_category(
+    request: Request,
+    form: CategoryCreateSchema = fastui_form(CategoryCreateSchema),
+    db: Session = Depends(get_db)
+) -> list[AnyComponent]:
+    '''Обработчик создания категории: сохраняет тему в SQLite.'''
+    user_id = get_user_from_session(request)
+    if not user_id:
+        return [c.FireEvent(event=GoToEvent(url='/login'))]
+
+    # Проверяем, нет ли уже категории с таким же именем у этого пользователя
+    existing_cat = db.query(models.Category).filter(
+        models.Category.name == form.name,
+        models.Category.user_id == user_id
+    ).first()
+    
+    if existing_cat:
+        raise HTTPException(status_code=400, detail='Категория с таким названием уже существует')
+
+    # Создаем и сохраняем новую категорию
+    new_category = models.Category(
+        name=form.name,
+        user_id=user_id
+    )
+    db.add(new_category)
+    db.commit()
+
+    # Перезагружаем страницу управления категориями, чтобы увидеть обновленный список
+    return [c.FireEvent(event=GoToEvent(url='/categories'))]
