@@ -3,10 +3,15 @@ from typing import Optional, List
 from pydantic import BaseModel, Field, ConfigDict, SecretStr
 
 class NoteCreateSchema(BaseModel):
-    '''Схема для формы добавления новой заметки.'''
+    '''Схема для формы добавления новой заметки с выпадающим списком.'''
     title: str = Field(title='Заголовок заметки', max_length=100)
     content: str = Field(title='Текст заметки')
-    category_id: Optional[int] = Field(default=None, title='Категория')
+    category_id: Optional[int] = Field(
+        default=None, 
+        title='Категория',
+        json_schema_extra={'ext': {'type': 'select'}}
+    )
+
 
 class NoteReadSchema(BaseModel):
     '''Схема для отображения заметок в таблице FastUI.'''
@@ -15,10 +20,12 @@ class NoteReadSchema(BaseModel):
     content: str
     created_at: datetime
     category_id: Optional[int] = None
+    category_name: Optional[str] = None  # НОВОЕ: Текстовое имя категории для интерфейса
     archive_action: str = ''
     delete_action: str = '❌ Удалить'
 
     model_config = ConfigDict(from_attributes=True)
+
 
 class UserRegisterSchema(BaseModel):
     '''Форма регистрации нового пользователя.'''
