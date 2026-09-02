@@ -1,3 +1,4 @@
+import os
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
@@ -88,11 +89,13 @@ def test_hidden_action_routes_block_guest(client):
 
 def test_admin_page_access_control(client, session):
     '''Проверяем права доступа к админке /users с корректной проверкой JSON.'''
+    # Устанавливаем тестовую переменную окружения, чтобы бэкенд знал, кто тут админ
+    os.environ['ADMIN_EMAIL'] = 'admin@test.ru'
+
     # 1. Создаем обычного пользователя и админа
     hashed = hash_password('pass123')
     simple_user = models.User(email='user@test.ru', hashed_password=hashed)
-    # Используем ваш эталонный email администратора из app/main.py
-    admin_user = models.User(email='admin@i.ua', hashed_password=hashed)
+    admin_user = models.User(email='admin@test.ru', hashed_password=hashed) # Теперь совпадает с ADMIN_EMAIL
     session.add_all([simple_user, admin_user])
     session.commit()
 
@@ -100,20 +103,21 @@ def test_admin_page_access_control(client, session):
     client.post('/api/login', data={'email': 'user@test.ru', 'password': 'pass123'})
     response = client.get('/api/users')
     
-    # ИСПРАВЛЕНО: Проверяем реальную структуру JSON-ответа FastUI редиректа
     response_json = response.json()
     assert response.status_code == 200
+    
+    # ИСПРАВЛЕНО: Добавили, так как FastUI всегда возвращает список компонентов!
     assert response_json[0]['type'] == 'FireEvent'
     assert response_json[0]['event']['url'] == '/'
+
 
     # Выходим
     client.get('/api/logout')
 
     # 3. Тестируем под легальным админом
-    client.post('/api/login', data={'email': 'admin@i.ua', 'password': 'pass123'})
+    client.post('/api/login', data={'email': 'admin@test.ru', 'password': 'pass123'})
     response = client.get('/api/users')
     
-    # Админ должен успешно увидеть заголовок своей панели
     assert 'Управление пользователями' in str(response.json())
 
 

@@ -1,3 +1,5 @@
+import os
+
 from fastapi import FastAPI, Depends, HTTPException, Request, Response
 from fastapi import Form
 from fastapi.responses import HTMLResponse
@@ -58,7 +60,7 @@ def notes_list_page(request: Request, db: Session = Depends(get_db)) -> list[Any
             c.Link(components=[c.Text(text='🚪 Выйти')], on_click=GoToEvent(url='/logout'), class_name='btn btn-sm btn-danger me-2'),
             c.Link(components=[c.Text(text='❌ Удалить аккаунт')], on_click=GoToEvent(url='/delete-account'), class_name='btn btn-sm btn-outline-danger me-2')
         ]
-        if user.email == 'admin@i.ua':
+        if user.email == os.getenv('ADMIN_EMAIL', 'admin@example.com'):
             auth_components.append(
                 c.Link(components=[c.Text(text='👥 Админка')], on_click=GoToEvent(url='/users'), class_name='btn btn-sm btn-secondary')
             )
@@ -226,8 +228,7 @@ def admin_users_page(request: Request, db: Session = Depends(get_db)) -> list[An
     user = db.query(models.User).filter(models.User.id == user_id).first() if user_id else None
     
     # 2. ИСПРАВЛЕНО: Если пользователь не вошел или его email не админский, разворачиваем на главную
-    # Впишите сюда свой реальный email, под которым будете администрировать систему
-    if not user or user.email != 'admin@i.ua':
+    if not user or user.email != os.getenv('ADMIN_EMAIL', 'admin@example.com'):
         return [c.FireEvent(event=GoToEvent(url='/'))]
 
     # 3. Если проверку прошел — загружаем список
@@ -270,7 +271,7 @@ def handle_admin_delete_user(
     current_user_id = get_user_from_session(request)
     current_user = db.query(models.User).filter(models.User.id == current_user_id).first() if current_user_id else None
     
-    if not current_user or current_user.email != 'admin@i.ua':  # Используем ваш реальный email!
+    if not current_user or current_user.email != os.getenv('ADMIN_EMAIL', 'admin@example.com'):
         return [c.FireEvent(event=GoToEvent(url='/'))]
         
     # 2. Не даем админу случайно удалить самого себя (защита от выстрела в ногу)
