@@ -146,8 +146,9 @@ def view_note_page(note_id: int, request: Request, db: Session = Depends(get_db)
 def add_note_page(request: Request, db: Session = Depends(get_db)) -> list[AnyComponent]:
     '''Страница создания новой заметки с ручной сборкой формы без ошибок Pydantic.'''
     user_id = get_user_from_session(request)
+
     if not user_id:
-        return [c.FireEvent(event=GoToEvent(url='/login'))]
+        return [c.FireEvent(event=GoToEvent(url='/login?error=auth_required'))]
 
     # 1. Загружаем все категории текущего пользователя
     db_categories = db.query(models.Category).filter(models.Category.user_id == user_id).order_by(models.Category.name.asc()).all()
@@ -188,8 +189,10 @@ def add_note_page(request: Request, db: Session = Depends(get_db)) -> list[AnyCo
 def categories_management_page(request: Request, db: Session = Depends(get_db)) -> list[AnyComponent]:
     '''Страница настройки категорий: форма создания и интерактивная таблица удаления.'''
     user_id = get_user_from_session(request)
+
     if not user_id:
-        return [c.FireEvent(event=GoToEvent(url='/login'))]
+        return [c.FireEvent(event=GoToEvent(url='/login?error=auth_required'))]
+
 
     # Загружаем категории и валидируем их через схему со встроенной кнопкой удаления
     db_categories = db.query(models.Category).filter(models.Category.user_id == user_id).order_by(models.Category.name.asc()).all()
@@ -244,8 +247,10 @@ def handle_delete_category(
 ) -> list[AnyComponent]:
     '''Роут удаления: стирает категорию из базы данных, изолируя права пользователя.'''
     user_id = get_user_from_session(request)
+    
     if not user_id:
-        return [c.FireEvent(event=GoToEvent(url='/login'))]
+        return [c.FireEvent(event=GoToEvent(url='/login?error=auth_required'))]
+
 
     # Находим категорию и строго проверяем, принадлежит ли она текущему пользователю (защита!)
     category = db.query(models.Category).filter(

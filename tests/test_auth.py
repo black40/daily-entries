@@ -79,12 +79,19 @@ def test_user_login_success_sets_cookie(client, session):
 
 
 def test_hidden_action_routes_block_guest(client):
-    '''Проверяем защиту роутов: гость не может отправить заметку в архив.'''
-    # Пытаемся дернуть архив напрямую без куки
-    response = client.get('/api/note/1/archive-run')
+    '''Проверяем защиту роутов: гость не может ни открыть форму, ни отправить её.'''
+    # 1. Проверяем попытку открыть форму
+    response = client.get('/api/add')
     assert response.status_code == 200
-    # Наша защита должна перенаправить взломщика на форму входа
-    assert '/login' in str(response.json())
+    assert 'auth_required' in str(response.json())
+
+    # 2. НОВОЕ: Симулируем попытку Гостя отправить заполненную форму POST-запросом
+    payload = {'title': 'Хак', 'content': 'Взлом', 'category_id': '0'}
+    response_post = client.post('/api/add', data=payload)
+    
+    assert response_post.status_code == 200
+    # Бэкенд должен вежливо выставить хакера на страницу входа
+    assert 'auth_required' in str(response_post.json())
 
 
 def test_admin_page_access_control(client, session):

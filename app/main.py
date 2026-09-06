@@ -1,8 +1,7 @@
 import os
 from typing import Optional
 
-from fastapi import FastAPI, Depends, HTTPException, Request, Response
-from fastapi import Form
+from fastapi import FastAPI, Depends, HTTPException, Request, Response, Form, Query
 from fastapi.responses import HTMLResponse
 from sqlalchemy.orm import Session
 
@@ -45,7 +44,6 @@ async def sliding_session_middleware(request: Request, call_next):
     return response
 
 
-@app.get('/api/', response_model=FastUI, response_model_exclude_none=True)
 @app.get('/api/', response_model=FastUI, response_model_exclude_none=True)
 def notes_list_page(
     request: Request, 
@@ -194,49 +192,86 @@ def notes_list_page(
 
 
 @app.get('/api/register', response_model=FastUI, response_model_exclude_none=True)
-def register_page() -> list[AnyComponent]:
-    return [
-        c.Page(
-            components=[
-                c.Heading(text='👤 Регистрация нового аккаунта', level=1),
-                c.Link(components=[c.Text(text='🔙 На главную')], on_click=GoToEvent(url='/'), class_name='btn btn-secondary mb-3'),
-                c.Div(components=[], class_name='mt-4'),
-                c.ModelForm(model=UserRegisterSchema, submit_url='/api/register', initial={})
-            ]
-        )
+def register_page(error: Optional[str] = Query(None)) -> list[AnyComponent]:
+    '''Страница регистрации: расшифровывает код ошибки.'''
+    components = [
+        c.Heading(text='👤 Регистрация нового аккаунта', level=1),
+        c.Link(components=[c.Text(text='🔙 На главную')], on_click=GoToEvent(url='/'), class_name='btn btn-secondary mb-4'),
+        c.Div(components=[], class_name='mt-4'),
     ]
+
+    if error:
+        msg = 'Этот email уже занят другим пользователем.' if error == 'email_taken' else 'Ошибка регистрации.'
+        components.append(
+            c.Paragraph(text=f'⚠️ {msg}', class_name='alert alert-warning p-2 rounded mb-3 small')
+        )
+
+    components.append(c.ModelForm(model=UserRegisterSchema, submit_url='/api/register'))
+    return [c.Page(components=components)]
 
 
 @app.post('/api/register', response_model=FastUI, response_model_exclude_none=True)
-def handle_register(form: UserRegisterSchema = fastui_form(UserRegisterSchema), db: Session = Depends(get_db)) -> list[AnyComponent]:
+def handle_register(
+    form: UserRegisterSchema = fastui_form(UserRegisterSchema),
+    db: Session = Depends(get_db)
+) -> list[AnyComponent]:
+    '''Обработчик регистрации: шлет короткий код ошибки.'''
     existing_user = db.query(models.User).filter(models.User.email == form.email).first()
+    
+    # ИСПРАВЛЕНО: Шлем короткий код email_taken
     if existing_user:
-        raise HTTPException(status_code=400, detail='Пользователь с таким email уже существует')
-    hashed_pwd = hash_password(form.password.get_secret_value())
-    new_user = models.User(email=form.email, hashed_password=hashed_pwd)
-    db.add(new_user); db.commit()
+        return [c.FireEvent(event=GoToEvent(url='/register?error=email_taken'))]
+
+    hashed_password = hash_password(form.password.get_secret_value())
+    new_user = models.User(email=form.email, hashed_password=hashed_password)
+    db.add(new_user)
+    db.commit()
+
     return [c.FireEvent(event=GoToEvent(url='/login'))]
 
 
 @app.get('/api/login', response_model=FastUI, response_model_exclude_none=True)
-def login_page() -> list[AnyComponent]:
-    return [
-        c.Page(
-            components=[
-                c.Heading(text='🔑 Вход в систему', level=1),
-                c.Link(components=[c.Text(text='🔙 На главную')], on_click=GoToEvent(url='/'), class_name='btn btn-secondary mb-3'),
-                c.Div(components=[], class_name='mt-4'),
-                c.ModelForm(model=UserLoginSchema, submit_url='/api/login', initial={})
-            ]
-        )
+def login_page(error: Optional[str] = Query(None)) -> list[AnyComponent]:
+    '''Страница входа: аккуратно расшифровывает коды ошибок из URL.'''
+    components = [
+        c.Heading(text='🔑 Вход в систему', level=1),
+        c.Link(components=[c.Text(text='🔙 На главную')], on_click=GoToEvent(url='/'), class_name='btn btn-secondary mb-4'),
+        c.Div(components=[], class_name='mt-4'),
     ]
+
+    # ИСПРАВЛЕНО: Расшифровываем лаконичные коды ошибок в красивый русский текст
+    if error:
+        error_messages = {
+            'user_not_found': 'Пользователя с таким email не существует.',
+            'wrong_password': 'Указан неверный пароль для этого аккаунта.',
+            'auth_required': 'Пожалуйста, войдите в аккаунт, чтобы создавать или просматривать заметки.'
+        }
+        msg = error_messages.get(error, 'Произошла ошибка при входе.')
+        components.append(
+            c.Paragraph(text=f'⚠️ {msg}', class_name='alert alert-danger p-2 rounded mb-3 small')
+        )
+
+
+    components.append(c.ModelForm(model=UserLoginSchema, submit_url='/api/login'))
+    return [c.Page(components=components)]
 
 
 @app.post('/api/login', response_model=FastUI, response_model_exclude_none=True)
-def handle_login(response: Response, form: UserLoginSchema = fastui_form(UserLoginSchema), db: Session = Depends(get_db)) -> list[AnyComponent]:
+def handle_login(
+    response: Response,
+    form: UserLoginSchema = fastui_form(UserLoginSchema),
+    db: Session = Depends(get_db)
+) -> list[AnyComponent]:
+    '''Обработчик входа: шлет лаконичные английские коды вместо длинного русского текста.'''
     user = db.query(models.User).filter(models.User.email == form.email).first()
-    if not user or not verify_password(form.password.get_secret_value(), user.hashed_password):
-        raise HTTPException(status_code=400, detail='Неверный email или пароль')
+
+    # ИСПРАВЛЕНО: Вместо длинного текста отправляем короткий системный код
+    if not user:
+        return [c.FireEvent(event=GoToEvent(url='/login?error=user_not_found'))]
+
+    if not verify_password(form.password.get_secret_value(), user.hashed_password):
+        return [c.FireEvent(event=GoToEvent(url='/login?error=wrong_password'))]
+
     set_user_session(response, user.id)
     return [c.FireEvent(event=GoToEvent(url='/'))]
 
@@ -329,19 +364,27 @@ def handle_admin_delete_user(
 @app.post('/api/add', response_model=FastUI, response_model_exclude_none=True)
 def handle_add_note(
     request: Request,
+    response: Response,  # <-- ДОБАВИЛИ response, чтобы иметь возможность стереть битую куку
     title: str = Form(...),
     content: str = Form(...),
-    category_id: str = Form(...),  # Прилетает в виде строки ('0', '1', '2')
+    category_id: str = Form(...),
     db: Session = Depends(get_db)
 ) -> list[AnyComponent]:
-    '''Обработчик добавления заметки: конвертирует строковый ID категории в число для SQLite.'''
+    '''Обработчик добавления заметки с проверкой физического существования юзера в SQLite.'''
     user_id = get_user_from_session(request)
+    
+    # 1. Если куки нет вообще — отправляем на вход
     if not user_id:
-        return [c.FireEvent(event=GoToEvent(url='/login'))]
+        return [c.FireEvent(event=GoToEvent(url='/login?error=auth_required'))]
 
-    # ИСПРАВЛЕНО: Конвертируем строковый ID категории в чистое число.
-    # Если пришел '0' (Без категории), записываем в базу None.
-    # Если пришло число ('1', '2') — превращаем в int, чтобы SQLAlchemy правильно связала таблицы!
+    # 2. Проверяем, существует ли этот пользователь в базе данных физически!
+    user_exists = db.query(models.User).filter(models.User.id == user_id).first()
+    if not user_exists:
+        # Если кука «битая» (базу удалили, а сессия осталась), стираем её из браузера
+        response.delete_cookie('diary_session')
+        return [c.FireEvent(event=GoToEvent(url='/login?error=auth_required'))]
+
+    # Конвертируем строковый ID категории в число
     parsed_category_id = None
     if category_id and category_id != '0':
         try:
@@ -349,12 +392,11 @@ def handle_add_note(
         except ValueError:
             parsed_category_id = None
 
-    # Создаем запись с идеально провалидированными типами данных
     new_note = models.Note(
         title=title,
         content=content,
         user_id=user_id,
-        category_id=parsed_category_id  # Теперь сюда пишется легальный int или None
+        category_id=parsed_category_id
     )
     db.add(new_note)
     db.commit()
