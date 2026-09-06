@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, Form
 from sqlalchemy.orm import Session
 from fastui import FastUI, AnyComponent
 from fastui import components as c
@@ -117,22 +117,29 @@ def view_note_page(note_id: int, request: Request, db: Session = Depends(get_db)
     return [
         c.Page(
             components=[
-                # ИСПРАВЛЕНО: Жестко прописали db_note.title. 
-                # Теперь здесь будет выводиться реальный заголовок (например, "Мой день"), а не безликая цифра 4!
                 c.Heading(text=db_note.title, level=1, class_name='mb-2'),
                 
-                # Дата создания и категория
+                # Дата создания и категория заметки
                 c.Paragraph(
                     text=f'Дата создания: {note.created_at.strftime("%d.%m.%Y %H:%M")} | Категория: {note.category_name}', 
                     class_name='text-muted small mb-4'
                 ),
                 
-                c.Link(components=[c.Text(text='🔙 Назад к списку')], on_click=GoToEvent(url='/'), class_name='btn btn-secondary mb-3'),
+                # ИСПРАВЛЕНО: Две кнопки стоят аккуратно в один ряд в общем блоке Div
+                c.Div(
+                    components=[
+                        c.Link(components=[c.Text(text='🔙 Назад к списку')], on_click=GoToEvent(url='/'), class_name='btn btn-secondary me-2'),
+                        c.Link(components=[c.Text(text='🏷 Сменить категорию')], on_click=GoToEvent(url=f'/note/{note_id}/edit-category'), class_name='btn btn-outline-primary')
+                    ],
+                    class_name='mb-4'
+                ),
+                
                 c.Div(components=[], class_name='my-4 p-4 bg-light rounded border'),
                 c.Markdown(text=note.content),
             ]
         )
     ]
+
 
 
 @router.get('/add', response_model=FastUI, response_model_exclude_none=True)
@@ -284,3 +291,81 @@ def handle_create_category(
 
     # Перезагружаем страницу управления категориями, чтобы увидеть обновленный список
     return [c.FireEvent(event=GoToEvent(url='/categories'))]
+
+@router.get('/note/{note_id}/edit-category', response_model=FastUI, response_model_exclude_none=True)
+def edit_note_category_page(note_id: int, request: Request, db: Session = Depends(get_db)) -> list[AnyComponent]:
+    '''Страница изменения категории для уже существующей заметки.'''
+    user_id = get_user_from_session(request)
+    if not user_id:
+        return [c.FireEvent(event=GoToEvent(url='/login'))]
+
+    # Находим заметку и проверяем права доступа
+    db_note = db.query(models.Note).filter(models.Note.id == note_id).first()
+    if not db_note or db_note.user_id != user_id:
+        return [c.FireEvent(event=GoToEvent(url='/'))]
+
+    # 1. Загружаем все категории текущего пользователя для выпадающего списка
+    db_categories = db.query(models.Category).filter(models.Category.user_id == user_id).order_by(models.Category.name.asc()).all()
+    
+    # 2. Формируем опции для Select
+    select_options = [{'value': '0', 'label': 'Без категории'}]
+    for cat in db_categories:
+        select_options.append({'value': str(cat.id), 'label': f'📁 {cat.name}'})
+
+    # Определяем текущее значение, чтобы список открывался на текущей категории заметки
+    current_value = str(db_note.category_id) if db_note.category_id else '0'
+
+    return [
+        c.Page(
+            components=[
+                c.Heading(text=f'Перенос заметки: «{db_note.title}»', level=2),
+                c.Link(components=[c.Text(text='🔙 Отмена')], on_click=GoToEvent(url=f'/note/{note_id}'), class_name='btn btn-secondary mb-4'),
+                c.Div(components=[], class_name='mt-4'),
+                
+                # Форма со списком категорий
+                c.Form(
+                    submit_url=f'/api/note/{note_id}/edit-category',
+                    form_fields=[
+                        FormFieldSelect(
+                            name='category_id', 
+                            title='Выберите новую категорию', 
+                            options=select_options,
+                            initial=current_value
+                        )
+                    ]
+                )
+            ]
+        )
+    ]
+
+
+@router.post('/note/{note_id}/edit-category', response_model=FastUI, response_model_exclude_none=True)
+def handle_edit_note_category(
+    note_id: int,
+    request: Request,
+    category_id: str = Form(...),  # Получаем выбранное значение строкой ('0', '1', '2')
+    db: Session = Depends(get_db)
+) -> list[AnyComponent]:
+    '''Обработчик изменения категории: обновляет поле category_id в SQLite.'''
+    user_id = get_user_from_session(request)
+    if not user_id:
+        return [c.FireEvent(event=GoToEvent(url='/login'))]
+
+    db_note = db.query(models.Note).filter(models.Note.id == note_id).first()
+    if not db_note or db_note.user_id != user_id:
+        return [c.FireEvent(event=GoToEvent(url='/'))]
+
+    # Конвертируем строковый ID в число или None
+    parsed_category_id = None
+    if category_id and category_id != '0':
+        try:
+            parsed_category_id = int(category_id)
+        except ValueError:
+            parsed_category_id = None
+
+    # Обновляем поле в базе данных
+    db_note.category_id = parsed_category_id
+    db.commit()
+
+    # Возвращаем пользователя на страницу детального просмотра этой заметки
+    return [c.FireEvent(event=GoToEvent(url=f'/note/{note_id}'))]
