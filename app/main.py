@@ -5,6 +5,9 @@ from fastapi import Form
 from fastapi.responses import HTMLResponse
 from sqlalchemy.orm import Session
 
+from dotenv import load_dotenv
+load_dotenv()
+
 from fastui import FastUI, AnyComponent, prebuilt_html
 from fastui import components as c
 from fastui.components.display import DisplayLookup, DisplayMode
