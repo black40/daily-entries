@@ -177,9 +177,6 @@ def add_note_page(request: Request, db: Session = Depends(get_db)) -> list[AnyCo
     ]
 
 
-# Убедитесь, что CategoryReadSchema импортирована вверху файла:
-# from app.schemas import NoteCreateSchema, NoteReadSchema, CategoryCreateSchema, CategoryReadSchema
-
 @router.get('/categories', response_model=FastUI, response_model_exclude_none=True)
 def categories_management_page(request: Request, db: Session = Depends(get_db)) -> list[AnyComponent]:
     '''Страница настройки категорий: форма создания и интерактивная таблица удаления.'''
