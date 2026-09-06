@@ -9,8 +9,8 @@ from fastui.forms import fastui_form
 from app.database import get_db
 from app.session import get_user_from_session
 import app.models as models
-from app.schemas import NoteCreateSchema, NoteReadSchema, CategoryCreateSchema
-from fastui.components.forms import FormFieldInput, FormFieldSelect, FormFieldTextarea  # <-- ДОБАВЬТЕ ЭТОТ ИМПОРТ НАВЕРХ ФАЙЛА, если линтер ругается
+from app.schemas import NoteCreateSchema, NoteReadSchema, CategoryCreateSchema, CategoryReadSchema
+from fastui.components.forms import FormFieldInput, FormFieldSelect, FormFieldTextarea
 
 # Создаем дочерний роутер для заметок
 router = APIRouter(prefix='/api')
@@ -177,21 +177,19 @@ def add_note_page(request: Request, db: Session = Depends(get_db)) -> list[AnyCo
     ]
 
 
+# Убедитесь, что CategoryReadSchema импортирована вверху файла:
+# from app.schemas import NoteCreateSchema, NoteReadSchema, CategoryCreateSchema, CategoryReadSchema
+
 @router.get('/categories', response_model=FastUI, response_model_exclude_none=True)
 def categories_management_page(request: Request, db: Session = Depends(get_db)) -> list[AnyComponent]:
-    '''Страница настройки категорий: список и форма добавления.'''
+    '''Страница настройки категорий: форма создания и интерактивная таблица удаления.'''
     user_id = get_user_from_session(request)
     if not user_id:
         return [c.FireEvent(event=GoToEvent(url='/login'))]
 
-    # Загружаем все существующие категории этого пользователя
+    # Загружаем категории и валидируем их через схему со встроенной кнопкой удаления
     db_categories = db.query(models.Category).filter(models.Category.user_id == user_id).order_by(models.Category.name.asc()).all()
-    
-    categories_list = []
-    for cat in db_categories:
-        categories_list.append(
-            c.Paragraph(text=f'📁 {cat.name}', class_name='p-2 bg-white rounded border mb-1 small')
-        )
+    categories_for_table = [CategoryReadSchema.model_validate(cat) for cat in db_categories]
 
     return [
         c.Page(
@@ -204,17 +202,27 @@ def categories_management_page(request: Request, db: Session = Depends(get_db)) 
                         c.Div(
                             components=[
                                 c.Heading(text='Создать новую категорию', level=3, class_name='mb-3'),
-                                # Форма создания на основе нашей схемы
                                 c.ModelForm(model=CategoryCreateSchema, submit_url='/api/categories')
                             ],
-                            class_name='col-md-6 border-end pe-4'
+                            class_name='col-md-5 border-end pe-4'
                         ),
                         c.Div(
                             components=[
                                 c.Heading(text='Ваши текущие категории', level=3, class_name='mb-3'),
-                                *categories_list
-                            ] if categories_list else [c.Paragraph(text='Вы еще не создали ни одной категории.', class_name='text-muted')],
-                            class_name='col-md-6 ps-4'
+                                # ИСПРАВЛЕНО: Вместо списка параграфов выводим полноценную таблицу с действием!
+                                c.Table(
+                                    data=categories_for_table,
+                                    columns=[
+                                        DisplayLookup(field='name', title='Название папки'),
+                                        DisplayLookup(
+                                            field='delete_action', 
+                                            title='Действие', 
+                                            on_click=GoToEvent(url='/categories/{id}/delete')
+                                        )
+                                    ]
+                                ) if categories_for_table else c.Paragraph(text='Вы еще не создали ни одной категории.', class_name='text-muted')
+                            ],
+                            class_name='col-md-7 ps-4'
                         )
                     ],
                     class_name='row'
@@ -222,6 +230,31 @@ def categories_management_page(request: Request, db: Session = Depends(get_db)) 
             ]
         )
     ]
+
+
+@router.get('/categories/{category_id}/delete', response_model=FastUI, response_model_exclude_none=True)
+def handle_delete_category(
+    category_id: int, 
+    request: Request, 
+    db: Session = Depends(get_db)
+) -> list[AnyComponent]:
+    '''Роут удаления: стирает категорию из базы данных, изолируя права пользователя.'''
+    user_id = get_user_from_session(request)
+    if not user_id:
+        return [c.FireEvent(event=GoToEvent(url='/login'))]
+
+    # Находим категорию и строго проверяем, принадлежит ли она текущему пользователю (защита!)
+    category = db.query(models.Category).filter(
+        models.Category.id == category_id,
+        models.Category.user_id == user_id
+    ).first()
+
+    if category:
+        db.delete(category)
+        db.commit()
+
+    # Перезагружаем страницу категорий, чтобы увидеть обновленную таблицу
+    return [c.FireEvent(event=GoToEvent(url='/categories'))]
 
 
 @router.post('/categories', response_model=FastUI, response_model_exclude_none=True)

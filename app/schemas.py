@@ -56,5 +56,6 @@ class CategoryReadSchema(BaseModel):
     id: int
     name: str
     user_id: int
-
+    
+    delete_action: str = '❌ Удалить'
     model_config = ConfigDict(from_attributes=True)
