@@ -1,4 +1,5 @@
 import os
+from typing import Optional
 
 from fastapi import FastAPI, Depends, HTTPException, Request, Response
 from fastapi import Form
@@ -45,8 +46,13 @@ async def sliding_session_middleware(request: Request, call_next):
 
 
 @app.get('/api/', response_model=FastUI, response_model_exclude_none=True)
-def notes_list_page(request: Request, db: Session = Depends(get_db)) -> list[AnyComponent]:
-    '''Главная страница: динамический вывод заметок и категорий в сайдбаре.'''
+@app.get('/api/', response_model=FastUI, response_model_exclude_none=True)
+def notes_list_page(
+    request: Request, 
+    category_id: Optional[int] = None,  # НОВОЕ: принимаем id категории для фильтрации
+    db: Session = Depends(get_db)
+) -> list[AnyComponent]:
+    '''Главная страница: вывод категорий в таблице и фильтрация по клику в сайдбаре.'''
     user_id = get_user_from_session(request)
     auth_components = []
     notes_for_table = []
@@ -68,18 +74,49 @@ def notes_list_page(request: Request, db: Session = Depends(get_db)) -> list[Any
                 c.Link(components=[c.Text(text='👥 Админка')], on_click=GoToEvent(url='/users'), class_name='btn btn-sm btn-secondary')
             )
         
-        # Подгружаем активные заметки пользователя
-        db_notes = db.query(models.Note).filter(models.Note.is_archived == False, models.Note.user_id == user_id).order_by(models.Note.created_at.desc()).all()
-        notes_for_table = [NoteReadSchema.model_validate(note) for note in db_notes]
-        for n in notes_for_table:
-            n.archive_action = '📦 В архив'
+        # 1. Формируем базовый запрос заметок пользователя
+        query = db.query(models.Note).filter(models.Note.is_archived == False, models.Note.user_id == user_id)
+        
+        # НОВОЕ: Если передан category_id, фильтруем заметки!
+        # Значение 0 будет означать "Без категории"
+        if category_id is not None:
+            if category_id == 0:
+                query = query.filter(models.Note.category_id == None)
+            else:
+                query = query.filter(models.Note.category_id == category_id)
+                
+        db_notes = query.order_by(models.Note.created_at.desc()).all()
+        
+        # Превращаем заметки в Pydantic-схемы и подтягиваем имена категорий
+        for note in db_notes:
+            schema = NoteReadSchema.model_validate(note)
+            schema.category_name = f'📁 {note.category.name}' if note.category else '📝 Без категории'
+            schema.archive_action = '📦 В архив'
+            notes_for_table.append(schema)
             
-        # НОВОЕ: Подгружаем реальные категории пользователя из SQLite!
+        # 2. НОВОЕ: Формируем КЛИКАБЕЛЬНЫЙ сайдбар категорий
         db_categories = db.query(models.Category).filter(models.Category.user_id == user_id).order_by(models.Category.name.asc()).all()
+        
+        # Ссылка на показ вообще ВСЕХ заметок
+        sidebar_categories.append(
+            c.Link(components=[c.Text(text='🌐 Все заметки')], on_click=GoToEvent(url='/'), class_name=f'd-block p-2 rounded small mb-1 {"bg-primary text-white" if category_id is None else "bg-white text-dark border"}')
+        )
+        
+        # Ссылки на конкретные категории
         for cat in db_categories:
+            is_active = category_id == cat.id
             sidebar_categories.append(
-                c.Paragraph(text=f'📁 {cat.name}', class_name='p-2 bg-white rounded border mb-1 small')
+                c.Link(
+                    components=[c.Text(text=f'📁 {cat.name}')], 
+                    on_click=GoToEvent(url=f'/?category_id={cat.id}'),
+                    class_name=f'd-block p-2 rounded small mb-1 { "bg-primary text-white" if is_active else "bg-white text-dark border"}'
+                )
             )
+            
+        # Ссылка на заметки БЕЗ категории
+        sidebar_categories.append(
+            c.Link(components=[c.Text(text='📝 Без категории')], on_click=GoToEvent(url='/?category_id=0'), class_name=f'd-block p-2 rounded small mb-1 {"bg-primary text-white" if category_id == 0 else "bg-white text-dark border"}')
+        )
     else:
         auth_components = [
             c.Paragraph(text='👤 Гость', class_name='text-muted me-3 d-inline small'),
@@ -95,18 +132,16 @@ def notes_list_page(request: Request, db: Session = Depends(get_db)) -> list[Any
             content_components.append(
                 c.Table(data=notes_for_table, columns=[
                     DisplayLookup(field='title', title='Название', on_click=GoToEvent(url='/note/{id}')),
+                    # НОВОЕ: Выводим колонку категории прямо на главную страницу!
+                    DisplayLookup(field='category_name', title='Категория'),
                     DisplayLookup(field='created_at', title='Дата создания', mode=DisplayMode.date),
                     DisplayLookup(field='archive_action', title='Действие', on_click=GoToEvent(url='/note/{id}/archive-run')),
                 ])
             )
         else:
-            content_components.append(c.Paragraph(text='Активных записей нет. Создайте первую категорию и напишите заметку!'))
+            content_components.append(c.Paragraph(text='В этой категории активных записей не найдено.', class_name='text-muted italic'))
     else:
         content_components.append(c.Paragraph(text='Пожалуйста, войдите в свой аккаунт, чтобы просматривать и создавать личные заметки.', class_name='alert alert-info'))
-
-    # Формируем блок категорий для сайдбара
-    if not sidebar_categories and user_id:
-        sidebar_categories.append(c.Paragraph(text='Категорий пока нет', class_name='text-muted small italic mb-3'))
 
     return [
         c.Page(
@@ -133,7 +168,7 @@ def notes_list_page(request: Request, db: Session = Depends(get_db)) -> list[Any
                                         c.Heading(text='📂 Категории', level=4, class_name='mb-2'),
                                         c.Div(
                                             components=sidebar_categories + ([
-                                                c.Link(components=[c.Text(text='⚙️ Настроить категории')], on_click=GoToEvent(url='/categories'), class_name='btn btn-sm btn-link p-0 mt-2')
+                                                c.Link(components=[c.Text(text='⚙️ Настроить категории')], on_click=GoToEvent(url='/categories'), class_name='btn btn-sm btn-link p-0 mt-2 d-block')
                                             ] if user_id else []),
                                             class_name='p-3 bg-light rounded border'
                                         )
@@ -150,7 +185,7 @@ def notes_list_page(request: Request, db: Session = Depends(get_db)) -> list[Any
                 ),
                 # FOOTER
                 c.Div(
-                    components=[c.Paragraph(text='© 2026 Личный Дневник SaaS. Все права защищены. Бла бла бла...', class_name='text-muted text-center m-0 small')],
+                    components=[c.Paragraph(text='© 2026 Личный Дневник SaaS. Все права защищены.', class_name='text-muted text-center m-0 small')],
                     class_name='p-3 mt-auto bg-light border-top fixed-bottom'
                 )
             ]
