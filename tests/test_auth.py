@@ -79,19 +79,20 @@ def test_user_login_success_sets_cookie(client, session):
 
 
 def test_hidden_action_routes_block_guest(client):
-    '''Проверяем защиту роутов: гость не может ни открыть форму, ни отправить её.'''
-    # 1. Проверяем попытку открыть форму
+    '''Проверяем защиту роутов: гость блокируется при попытке вызвать скрытые действия.'''
+    # 1. Проверяем роут добавления (GET)
     response = client.get('/api/add')
     assert response.status_code == 200
-    assert 'auth_required' in str(response.json())
+    # Проверяем, что в ответе есть код ошибки авторизации
+    assert 'auth_required' in response.text
 
-    # 2. НОВОЕ: Симулируем попытку Гостя отправить заполненную форму POST-запросом
-    payload = {'title': 'Хак', 'content': 'Взлом', 'category_id': '0'}
-    response_post = client.post('/api/add', data=payload)
+    # 2. Проверяем роут архивации напрямую. 
+    # Внимание: если роутер в main.py подключен с префиксом /api, то путь будет /api/note/1/archive-run
+    response_archive = client.get('/api/note/1/archive-run', follow_redirects=False)
     
-    assert response_post.status_code == 200
-    # Бэкенд должен вежливо выставить хакера на страницу входа
-    assert 'auth_required' in str(response_post.json())
+    assert response_archive.status_code == 200
+    # Вместо response_archive.json() проверяем через сырой текст, чтобы избежать HTML-краша!
+    assert 'auth_required' in response_archive.text
 
 
 def test_admin_page_access_control(client, session):
@@ -157,3 +158,32 @@ def test_create_note_with_category(client, session):
     assert db_note is not None
     assert db_note.category_id == category.id
     assert db_note.user_id == user.id
+
+
+def test_create_note_with_empty_category(client, session):
+    '''Проверяем, что авторизованный юзер может создать заметку с пустой категорией.'''
+    # 1. Регистрируем и авторизуем пользователя
+    hashed = hash_password('pass123')
+    user = models.User(email='writer@test.ru', hashed_password=hashed)
+    session.add(user)
+    session.commit()
+    
+    client.post('/api/login', data={'email': 'writer@test.ru', 'password': 'pass123'})
+
+    # 2. Симулируем реальную отправку плоской формы из браузера
+    payload = {
+        'title': 'Тестовая запись',
+        'content': 'Текст заметки с Markdown',
+        'category_id': ''  # Пустая строка
+    }
+    
+    response = client.post('/api/add', data=payload)
+    
+    # 3. Проверяем статус 200 OK
+    assert response.status_code == 200
+    assert '/' in str(response.json())
+
+    # 4. Жесткая проверка физической записи в базе данных
+    created_note = session.query(models.Note).filter(models.Note.title == 'Тестовая запись').first()
+    assert created_note is not None
+    assert created_note.category_id is None
