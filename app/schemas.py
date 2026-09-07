@@ -1,16 +1,26 @@
 from datetime import datetime
-from typing import Optional, List
-from pydantic import BaseModel, Field, ConfigDict, SecretStr
+from typing import Optional
+from pydantic import BaseModel, Field, field_validator, ConfigDict, SecretStr
+
 
 class NoteCreateSchema(BaseModel):
-    '''Схема для формы добавления новой заметки с выпадающим списком.'''
-    title: str = Field(title='Заголовок заметки', max_length=100)
-    content: str = Field(title='Текст заметки')
-    category_id: Optional[int] = Field(
-        default=None, 
-        title='Категория',
-        json_schema_extra={'ext': {'type': 'select'}}
-    )
+    '''Схема для создания заметки через ModelForm/c.Form.'''
+    title: str = Field(title='Название заметки')
+    content: str = Field(title='Текст заметки (поддерживает Markdown)')
+    # ИСПРАВЛЕНО: Разрешаем на уровне типов принимать И число, И строку, И None
+    category_id: Optional[int | str] = Field(None, title='ID Категории')
+
+    @field_validator('category_id', mode='before')
+    @classmethod
+    def empty_string_to_none(cls, value):
+        # Если значение пустое во всех проявлениях — жестко возвращаем None
+        if value is None or str(value).strip() in ('', '0', 'None', 'null'):
+            return None
+        # Во всех остальных случаях принудительно отдаем чистый int для SQLite!
+        try:
+            return int(value)
+        except ValueError:
+            return None
 
 
 class NoteReadSchema(BaseModel):
@@ -18,10 +28,15 @@ class NoteReadSchema(BaseModel):
     id: int
     title: str
     content: str
+    is_archived: bool
     created_at: datetime
+    updated_at: datetime
+    user_id: int
     category_id: Optional[int] = None
-    category_name: Optional[str] = None  # НОВОЕ: Текстовое имя категории для интерфейса
-    archive_action: str = ''
+    
+    # Виртуальные поля для интерфейса FastUI
+    category_name: Optional[str] = None
+    archive_action: Optional[str] = None
     delete_action: str = '❌ Удалить'
 
     model_config = ConfigDict(from_attributes=True)
