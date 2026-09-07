@@ -15,7 +15,7 @@ from fastui.events import GoToEvent
 from fastui.forms import fastui_form
 
 from app.database import engine, Base, get_db
-from app.auth import hash_password, verify_password
+from app.auth import hash_password, verify_password, get_current_user
 from app.session import set_user_session, get_user_from_session, refresh_user_session
 from app.notes import router as notes_router  # ИМПОРТИРУЕМ НАШ НОВЫЙ РОУТЕР
 import app.models as models
@@ -25,7 +25,7 @@ app = FastAPI()
 Base.metadata.create_all(bind=engine)
 
 # ПОДКЛЮЧАЕМ РОУТЫ ЗАМЕТОК
-app.include_router(notes_router)
+app.include_router(notes_router, prefix='/api')
 
 
 @app.middleware('http')
@@ -47,36 +47,30 @@ async def sliding_session_middleware(request: Request, call_next):
 @app.get('/api/', response_model=FastUI, response_model_exclude_none=True)
 def notes_list_page(
     request: Request, 
-    category_id: Optional[int] = None,  # НОВОЕ: принимаем id категории для фильтрации
+    category_id: Optional[int] = None,
+    current_user: Optional[models.User] = Depends(get_current_user), # Наша умная зависимость
     db: Session = Depends(get_db)
 ) -> list[AnyComponent]:
-    '''Главная страница: вывод категорий в таблице и фильтрация по клику в сайдбаре.'''
-    user_id = get_user_from_session(request)
+    '''Главная страница под защитой единой зависимости авторизации.'''
     auth_components = []
     notes_for_table = []
     sidebar_categories = []
-    user = None
 
-    if user_id:
-        user = db.query(models.User).filter(models.User.id == user_id).first()
-
-    # Сборка компонентов авторизации хедера
-    if user_id and user:
+    # Если пользователь успешно авторизован и существует в базе
+    if current_user:
         auth_components = [
-            c.Paragraph(text=f'👤 {user.email}', class_name='text-muted me-2 d-inline small'),
+            c.Paragraph(text=f'👤 {current_user.email}', class_name='text-muted me-2 d-inline small'),
             c.Link(components=[c.Text(text='🚪 Выйти')], on_click=GoToEvent(url='/logout'), class_name='btn btn-sm btn-danger me-2'),
             c.Link(components=[c.Text(text='❌ Удалить аккаунт')], on_click=GoToEvent(url='/delete-account'), class_name='btn btn-sm btn-outline-danger me-2')
         ]
-        if user.email == os.getenv('ADMIN_EMAIL', 'admin@example.com'):
+        if current_user.email == os.getenv('ADMIN_EMAIL', 'admin@example.com'):
             auth_components.append(
                 c.Link(components=[c.Text(text='👥 Админка')], on_click=GoToEvent(url='/users'), class_name='btn btn-sm btn-secondary')
             )
         
-        # 1. Формируем базовый запрос заметок пользователя
-        query = db.query(models.Note).filter(models.Note.is_archived == False, models.Note.user_id == user_id)
+        # Запрос заметок на основе проверенного current_user.id
+        query = db.query(models.Note).filter(models.Note.is_archived == False, models.Note.user_id == current_user.id)
         
-        # НОВОЕ: Если передан category_id, фильтруем заметки!
-        # Значение 0 будет означать "Без категории"
         if category_id is not None:
             if category_id == 0:
                 query = query.filter(models.Note.category_id == None)
@@ -85,22 +79,19 @@ def notes_list_page(
                 
         db_notes = query.order_by(models.Note.created_at.desc()).all()
         
-        # Превращаем заметки в Pydantic-схемы и подтягиваем имена категорий
         for note in db_notes:
             schema = NoteReadSchema.model_validate(note)
             schema.category_name = f'📁 {note.category.name}' if note.category else '📝 Без категории'
             schema.archive_action = '📦 В архив'
             notes_for_table.append(schema)
             
-        # 2. НОВОЕ: Формируем КЛИКАБЕЛЬНЫЙ сайдбар категорий
-        db_categories = db.query(models.Category).filter(models.Category.user_id == user_id).order_by(models.Category.name.asc()).all()
+        # Сборка сайдбара категорий
+        db_categories = db.query(models.Category).filter(models.Category.user_id == current_user.id).order_by(models.Category.name.asc()).all()
         
-        # Ссылка на показ вообще ВСЕХ заметок
         sidebar_categories.append(
             c.Link(components=[c.Text(text='🌐 Все заметки')], on_click=GoToEvent(url='/'), class_name=f'd-block p-2 rounded small mb-1 {"bg-primary text-white" if category_id is None else "bg-white text-dark border"}')
         )
         
-        # Ссылки на конкретные категории
         for cat in db_categories:
             is_active = category_id == cat.id
             sidebar_categories.append(
@@ -111,30 +102,37 @@ def notes_list_page(
                 )
             )
             
-        # Ссылка на заметки БЕЗ категории
         sidebar_categories.append(
             c.Link(components=[c.Text(text='📝 Без категории')], on_click=GoToEvent(url='/?category_id=0'), class_name=f'd-block p-2 rounded small mb-1 {"bg-primary text-white" if category_id == 0 else "bg-white text-dark border"}')
         )
     else:
+        # Компоненты для Гостя
         auth_components = [
             c.Paragraph(text='👤 Гость', class_name='text-muted me-3 d-inline small'),
             c.Link(components=[c.Text(text='🔑 Войти')], on_click=GoToEvent(url='/login'), class_name='btn btn-sm btn-warning me-2'),
             c.Link(components=[c.Text(text='👤 Регистрация')], on_click=GoToEvent(url='/register'), class_name='btn btn-sm btn-outline-dark')
         ]
 
-    # Сборка центрального контента (CONTENT)
+        # Сборка центрального контента (CONTENT)
     content_components = []
-    if user_id and user:
+    if current_user:
         content_components.append(c.Heading(text='Ваши активные записи', level=3, class_name='mb-3'))
         if notes_for_table:
             content_components.append(
-                c.Table(data=notes_for_table, columns=[
-                    DisplayLookup(field='title', title='Название', on_click=GoToEvent(url='/note/{id}')),
-                    # НОВОЕ: Выводим колонку категории прямо на главную страницу!
-                    DisplayLookup(field='category_name', title='Категория'),
-                    DisplayLookup(field='created_at', title='Дата создания', mode=DisplayMode.date),
-                    DisplayLookup(field='archive_action', title='Действие', on_click=GoToEvent(url='/note/{id}/archive-run')),
-                ])
+                c.Table(
+                    data=notes_for_table, 
+                    columns=[
+                        DisplayLookup(field='title', title='Название', on_click=GoToEvent(url='/note/{id}')),
+                        DisplayLookup(field='category_name', title='Категория'),
+                        DisplayLookup(field='created_at', title='Дата создания', mode=DisplayMode.date),
+                        DisplayLookup(field='archive_action', title='Действие', on_click=GoToEvent(url='/note/{id}/archive-run')),
+                        DisplayLookup(
+                            field='delete_action', 
+                            title='Уничтожить', 
+                            on_click=GoToEvent(url='/note/{id}/delete-run')
+                        ),
+                    ]
+                )
             )
         else:
             content_components.append(c.Paragraph(text='В этой категории активных записей не найдено.', class_name='text-muted italic'))
@@ -160,14 +158,14 @@ def notes_list_page(
                                 # SIDEBAR
                                 c.Div(
                                     components=[
-                                        c.Link(components=[c.Text(text='➕ Написать заметку')], on_click=GoToEvent(url='/add'), class_name='btn btn-success w-100 mb-2') if user_id else c.Div(components=[]),
-                                        c.Link(components=[c.Text(text='🗂 Открыть архив')], on_click=GoToEvent(url='/archive'), class_name='btn btn-outline-secondary w-100 mb-4') if user_id else c.Div(components=[]),
+                                        c.Link(components=[c.Text(text='➕ Написать заметку')], on_click=GoToEvent(url='/add'), class_name='btn btn-success w-100 mb-2') if current_user else c.Div(components=[]),
+                                        c.Link(components=[c.Text(text='🗂 Открыть архив')], on_click=GoToEvent(url='/archive'), class_name='btn btn-outline-secondary w-100 mb-4') if current_user else c.Div(components=[]),
                                         
                                         c.Heading(text='📂 Категории', level=4, class_name='mb-2'),
                                         c.Div(
                                             components=sidebar_categories + ([
                                                 c.Link(components=[c.Text(text='⚙️ Настроить категории')], on_click=GoToEvent(url='/categories'), class_name='btn btn-sm btn-link p-0 mt-2 d-block')
-                                            ] if user_id else []),
+                                            ] if current_user else []),
                                             class_name='p-3 bg-light rounded border'
                                         )
                                     ],
@@ -363,40 +361,22 @@ def handle_admin_delete_user(
 
 @app.post('/api/add', response_model=FastUI, response_model_exclude_none=True)
 def handle_add_note(
-    request: Request,
-    response: Response,  # <-- ДОБАВИЛИ response, чтобы иметь возможность стереть битую куку
-    title: str = Form(...),
-    content: str = Form(...),
-    category_id: str = Form(...),
+    response: Response,
+    form: NoteCreateSchema = fastui_form(NoteCreateSchema),
+    current_user: Optional[models.User] = Depends(get_current_user),
     db: Session = Depends(get_db)
 ) -> list[AnyComponent]:
-    '''Обработчик добавления заметки с проверкой физического существования юзера в SQLite.'''
-    user_id = get_user_from_session(request)
-    
-    # 1. Если куки нет вообще — отправляем на вход
-    if not user_id:
-        return [c.FireEvent(event=GoToEvent(url='/login?error=auth_required'))]
-
-    # 2. Проверяем, существует ли этот пользователь в базе данных физически!
-    user_exists = db.query(models.User).filter(models.User.id == user_id).first()
-    if not user_exists:
-        # Если кука «битая» (базу удалили, а сессия осталась), стираем её из браузера
+    '''Обработчик добавления заметки через каноничную fastui_form.'''
+    if not current_user:
         response.delete_cookie('diary_session')
         return [c.FireEvent(event=GoToEvent(url='/login?error=auth_required'))]
 
-    # Конвертируем строковый ID категории в число
-    parsed_category_id = None
-    if category_id and category_id != '0':
-        try:
-            parsed_category_id = int(category_id)
-        except ValueError:
-            parsed_category_id = None
-
+    # Сохраняем запись в базу данных SQLite. 
     new_note = models.Note(
-        title=title,
-        content=content,
-        user_id=user_id,
-        category_id=parsed_category_id
+        title=form.title,
+        content=form.content,
+        user_id=current_user.id,
+        category_id=form.category_id  # Здесь гарантированно лежит либо чистый int, либо None
     )
     db.add(new_note)
     db.commit()
@@ -404,6 +384,31 @@ def handle_add_note(
     return [c.FireEvent(event=GoToEvent(url='/'))]
 
 
-@app.get('/{path:path}')
+@app.post('/api/add', response_model=FastUI, response_model_exclude_none=True)
+def handle_add_note(
+    response: Response,
+    form: NoteCreateSchema = fastui_form(NoteCreateSchema),
+    current_user: Optional[models.User] = Depends(get_current_user),
+    db: Session = Depends(get_db)
+) -> list[AnyComponent]:
+    '''Обработчик добавления заметки, адаптированный под ModelForm и валидатор пустых строк.'''
+    if not current_user:
+        response.delete_cookie('diary_session')
+        return [c.FireEvent(event=GoToEvent(url='/login?error=auth_required'))]
+
+    # ИСПРАВЛЕНО: Схема сама всё почистила! Просто берём готовое значение
+    new_note = models.Note(
+        title=form.title,
+        content=form.content,
+        user_id=current_user.id,
+        category_id=form.category_id  # Здесь уже гарантированно либо int, либо None
+    )
+    db.add(new_note)
+    db.commit()
+    
+    return [c.FireEvent(event=GoToEvent(url='/'))]
+
+@app.get('/{path:path}', response_class=HTMLResponse)
 async def html_landing() -> HTMLResponse:
-    return HTMLResponse(prebuilt_html(title='Личный Дневник'))
+    '''Отдаёт базовую HTML-страницу FastUI для сборки интерфейса в браузере.'''
+    return prebuilt_html(title='Личный Дневник SaaS')
